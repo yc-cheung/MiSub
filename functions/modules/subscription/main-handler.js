@@ -351,9 +351,7 @@ export async function resolveTarget({ token, profileIdentifier, config, allProfi
                 ...(Array.isArray(profile.subscriptions) ? profile.subscriptions.map(item => typeof item === 'object' ? item.id : item) : []),
                 ...(Array.isArray(profile.manualNodes) ? profile.manualNodes : [])
             ].filter(Boolean);
-            const relatedSubs = typeof storageAdapter.getSubscriptionsByIds === 'function'
-                ? await storageAdapter.getSubscriptionsByIds(Array.from(new Set(relatedIds)))
-                : allMisubs;
+            const relatedSubs = await storageAdapter.getSubscriptionsByIds(Array.from(new Set(relatedIds)));
             const misubMap = new Map(relatedSubs.map(item => [item.id, item]));
 
             // 1. Add subscriptions in order defined by profile

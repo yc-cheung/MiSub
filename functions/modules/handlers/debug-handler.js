@@ -116,12 +116,8 @@ export async function handleSystemInfoRequest(request, env) {
 
         // 获取基本统计信息
         const [allSubscriptions, allProfiles] = await Promise.all([
-            typeof storageAdapter.getAllSubscriptions === 'function'
-                ? storageAdapter.getAllSubscriptions()
-                : storageAdapter.get('misub_subscriptions_v1').then(res => res || []),
-            typeof storageAdapter.getAllProfiles === 'function'
-                ? storageAdapter.getAllProfiles()
-                : storageAdapter.get('misub_profiles_v1').then(res => res || [])
+            storageAdapter.getAllSubscriptions(),
+            storageAdapter.getAllProfiles()
         ]);
 
         const activeSubscriptions = allSubscriptions.filter(sub => sub.enabled).length;

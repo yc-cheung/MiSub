@@ -47,9 +47,7 @@ export async function handleProfileMode(request, env, profileId, userAgent, appl
         ...(Array.isArray(profile.subscriptions) ? profile.subscriptions.map(item => typeof item === 'object' ? item.id : item) : []),
         ...(Array.isArray(profile.manualNodes) ? profile.manualNodes : [])
     ].filter(Boolean);
-    const relatedSubs = typeof storageAdapter.getSubscriptionsByIds === 'function'
-        ? await storageAdapter.getSubscriptionsByIds(Array.from(new Set(relatedIds)))
-        : await storageAdapter.get(KV_KEY_SUBS) || [];
+    const relatedSubs = await storageAdapter.getSubscriptionsByIds(Array.from(new Set(relatedIds)));
     const misubMap = new Map(relatedSubs.map(item => [item.id, item]));
 
     const targetMisubs = [];

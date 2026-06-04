@@ -62,7 +62,8 @@ D1 当前采用“行级 JSON”结构：
   - `updated_at DATETIME`
 - `settings`
   - `key TEXT PRIMARY KEY`
-  - `value TEXT NOT NULL`：设置、下载计数、留言板、自定义规则模板等 JSON 或字符串值。
+  - `value TEXT NOT NULL`：设置、下载计数、留言板、自定义规则模板、`cron_last_execution` 等 JSON 或字符串值。
+  - `expires_at INTEGER`：TTL 过期时间戳（毫秒），用于 `putWithTTL` 写入的键；读取时若已过期则懒删除（见 ADR-0001）。旧库由 `ensureD1Schema` 通过 `ALTER TABLE` 自动补列。
   - `created_at DATETIME`
   - `updated_at DATETIME`
 
@@ -71,6 +72,7 @@ D1 当前采用“行级 JSON”结构：
 - 旧 D1 结构可能把整个订阅数组写在 `subscriptions.id = 'main'`，整个订阅组数组写在 `profiles.id = 'main'`。
 - `DataMigrator.migrateLegacyD1MainRows()` 会把旧的 `main` 数组拆成行级数据，再删除 `main` 行。
 - `_parseKey()` 对 `misub_subscriptions_v1`、`misub_profiles_v1`、`worker_settings_v1` 仍映射到 D1 的 `main` 兼容行；但常规读写优先使用 `getAllSubscriptions()`、`putSubscription()`、`getAllProfiles()`、`putProfile()` 等行级方法。
+- 适配器完全隐藏 KV/D1 差异（ADR-0001）：调用方不再读取 `adapter.type`，集合保存统一走 `adapter.persistCollection()`（KV 整块覆盖，D1 行级增量）；TTL 写入走 `adapter.putWithTTL()`（KV 原生过期，D1 用 `expires_at` 列 + 懒清理）。测试用 `InMemoryStorageAdapter`。
 
 ## 3. 订阅源与手动节点模型
 

@@ -7,8 +7,8 @@
  * - WebDAV credentials and runtime secrets are never written into backup payloads.
  */
 
-import { StorageFactory, SettingsCache, STORAGE_TYPES } from '../storage-adapter.js';
-import { KV_KEY_SUBS, KV_KEY_PROFILES, KV_KEY_SETTINGS } from './config.js';
+import { StorageFactory, SettingsCache } from '../storage-adapter.js';
+import { KV_KEY_SETTINGS } from './config.js';
 import { KV_KEY_RULE_TEMPLATES, listRuleTemplates } from './rule-template-handler.js';
 import { createJsonResponse, createErrorResponse } from './utils.js';
 
@@ -85,12 +85,8 @@ async function getStorage(env) {
 
 async function readBusinessData(storageAdapter) {
     const [subscriptions, profiles, ruleTemplates] = await Promise.all([
-        typeof storageAdapter.getAllSubscriptions === 'function'
-            ? storageAdapter.getAllSubscriptions()
-            : storageAdapter.get(KV_KEY_SUBS).then(value => value || []),
-        typeof storageAdapter.getAllProfiles === 'function'
-            ? storageAdapter.getAllProfiles()
-            : storageAdapter.get(KV_KEY_PROFILES).then(value => value || []),
+        storageAdapter.getAllSubscriptions(),
+        storageAdapter.getAllProfiles(),
         listRuleTemplates(storageAdapter).catch(() => [])
     ]);
 
@@ -175,35 +171,8 @@ export function normalizeBackupPayload(raw) {
 
 async function syncCollection(storageAdapter, type, items) {
     const finalItems = Array.isArray(items) ? items : [];
-    const isProfiles = type === 'profiles';
-    const key = isProfiles ? KV_KEY_PROFILES : KV_KEY_SUBS;
-
-    if (storageAdapter.type !== STORAGE_TYPES.KV) {
-        const getAll = isProfiles ? storageAdapter.getAllProfiles?.bind(storageAdapter) : storageAdapter.getAllSubscriptions?.bind(storageAdapter);
-        const putItem = isProfiles ? storageAdapter.putProfile?.bind(storageAdapter) : storageAdapter.putSubscription?.bind(storageAdapter);
-        const deleteItem = isProfiles ? storageAdapter.deleteProfileById?.bind(storageAdapter) : storageAdapter.deleteSubscriptionById?.bind(storageAdapter);
-
-        if (getAll && putItem && deleteItem) {
-            const currentItems = await getAll();
-            const finalMap = new Map(finalItems.filter(item => item?.id).map(item => [item.id, item]));
-            const currentMap = new Map((Array.isArray(currentItems) ? currentItems : []).filter(item => item?.id).map(item => [item.id, item]));
-
-            for (const item of finalMap.values()) {
-                const existing = currentMap.get(item.id);
-                if (!existing || JSON.stringify(existing) !== JSON.stringify(item)) {
-                    await putItem(item);
-                }
-            }
-            for (const id of currentMap.keys()) {
-                if (!finalMap.has(id)) {
-                    await deleteItem(id);
-                }
-            }
-            return;
-        }
-    }
-
-    await storageAdapter.put(key, finalItems);
+    // 适配器自行决定行级写入（D1）或整块覆盖（KV）；恢复属于全量替换，无增量补丁。
+    await storageAdapter.persistCollection(type, finalItems, null);
 }
 
 async function createPreRestoreSnapshot(env, storageAdapter, scope) {

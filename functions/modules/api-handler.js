@@ -11,7 +11,7 @@ import { clearAllNodeCaches } from '../services/node-cache-service.js';
 import { buildSubscriptionNodeCacheKey } from '../services/subscription-service.js';
 import { maybeRunScheduledTasks } from './scheduled-task-runner.js';
 
-import { KV_KEY_SUBS, KV_KEY_PROFILES, KV_KEY_SETTINGS, DEFAULT_SETTINGS as defaultSettings } from './config.js';
+import { KV_KEY_PROFILES, KV_KEY_SETTINGS, DEFAULT_SETTINGS as defaultSettings } from './config.js';
 import { listRuleTemplates } from './rule-template-handler.js';
 
 const PROFILE_DOWNLOAD_COUNT_PREFIX = 'misub_profile_download_count_';
@@ -56,76 +56,8 @@ async function getStorageAdapter(env) {
     return StorageFactory.createAdapter(env, storageType);
 }
 
-function isSimpleArrayDiff(diff) {
-    if (!diff || typeof diff !== 'object') return false;
-    const allowedKeys = ['added', 'updated', 'removed'];
-    if (!Object.keys(diff).every(key => allowedKeys.includes(key))) return false;
-    return ['added', 'updated', 'removed'].every(key => Array.isArray(diff[key] || []));
-}
-
-async function applyRowLevelDiff(storageAdapter, type, diff) {
-    const isProfile = type === 'profiles';
-    const putItem = isProfile ? storageAdapter.putProfile?.bind(storageAdapter) : storageAdapter.putSubscription?.bind(storageAdapter);
-    const deleteItem = isProfile ? storageAdapter.deleteProfileById?.bind(storageAdapter) : storageAdapter.deleteSubscriptionById?.bind(storageAdapter);
-
-    if (!putItem || !deleteItem || !isSimpleArrayDiff(diff)) {
-        return false;
-    }
-
-    // KV 模式下不支持行级 Diff，必须使用全量覆盖以保证原子性
-    if (storageAdapter.type === STORAGE_TYPES.KV) {
-        return false;
-    }
-
-    const { added = [], updated = [], removed = [] } = diff;
-
-    await Promise.all([
-        ...added.map(item => putItem(item)),
-        ...updated.map(item => putItem(item)),
-        ...removed.map(id => deleteItem(id))
-    ]);
-
-    return true;
-}
-
-async function syncCollectionRowLevel(storageAdapter, type, finalItems) {
-    const isProfile = type === 'profiles';
-    const getAll = isProfile ? storageAdapter.getAllProfiles?.bind(storageAdapter) : storageAdapter.getAllSubscriptions?.bind(storageAdapter);
-    const putItem = isProfile ? storageAdapter.putProfile?.bind(storageAdapter) : storageAdapter.putSubscription?.bind(storageAdapter);
-    const deleteItem = isProfile ? storageAdapter.deleteProfileById?.bind(storageAdapter) : storageAdapter.deleteSubscriptionById?.bind(storageAdapter);
-
-    if (!getAll || !putItem || !deleteItem || !Array.isArray(finalItems)) {
-        return false;
-    }
-
-    // KV 模式下不支持行级同步，必须使用全量覆盖以保证原子性
-    if (storageAdapter.type === STORAGE_TYPES.KV) {
-        return false;
-    }
-
-    const currentItems = await getAll();
-    const currentMap = new Map(currentItems.map(item => [item.id, item]));
-    const finalMap = new Map(finalItems.map(item => [item.id, item]));
-
-    const puts = [];
-    const deletes = [];
-
-    for (const item of finalItems) {
-        const existing = currentMap.get(item.id);
-        if (!existing || JSON.stringify(existing) !== JSON.stringify(item)) {
-            puts.push(putItem(item));
-        }
-    }
-
-    for (const existing of currentItems) {
-        if (!finalMap.has(existing.id)) {
-            deletes.push(deleteItem(existing.id));
-        }
-    }
-
-    await Promise.all([...puts, ...deletes]);
-    return true;
-}
+// 行级 vs 整块覆盖的决定已下沉到适配器（adapter.persistCollection，见 storage-adapter.js / ADR-0001）；
+// 这里不再按 adapter.type 分支。
 
 /**
  * 处理数据获取API
@@ -145,12 +77,8 @@ export async function handleDataRequest(env, context = null) {
         const storageAdapter = StorageFactory.createAdapter(env, storageType);
         const cachedSettings = await SettingsCache.get(env);
         const [misubs, rawProfiles, settings, ruleTemplates] = await Promise.all([
-            typeof storageAdapter.getAllSubscriptions === 'function'
-                ? storageAdapter.getAllSubscriptions()
-                : storageAdapter.get(KV_KEY_SUBS).then(res => res || []),
-            typeof storageAdapter.getAllProfiles === 'function'
-                ? storageAdapter.getAllProfiles()
-                : storageAdapter.get(KV_KEY_PROFILES).then(res => res || []),
+            storageAdapter.getAllSubscriptions(),
+            storageAdapter.getAllProfiles(),
             Promise.resolve(cachedSettings || {}).then(res => res || {}),
             listRuleTemplates(storageAdapter).catch(error => {
                 console.warn('[API /data] Failed to load custom rule templates:', error?.message || error);
@@ -232,12 +160,8 @@ export async function handleMisubsSave(request, env) {
             console.info('[API] Processing Diff Patch...');
             // 获取当前数据
             const [currentMisubs, currentProfiles] = await Promise.all([
-                typeof storageAdapter.getAllSubscriptions === 'function'
-                    ? storageAdapter.getAllSubscriptions()
-                    : storageAdapter.get(KV_KEY_SUBS).then(res => res || []),
-                typeof storageAdapter.getAllProfiles === 'function'
-                    ? storageAdapter.getAllProfiles()
-                    : storageAdapter.get(KV_KEY_PROFILES).then(res => res || [])
+                storageAdapter.getAllSubscriptions(),
+                storageAdapter.getAllProfiles()
             ]);
 
             // 应用补丁
@@ -334,31 +258,11 @@ export async function handleMisubsSave(request, env) {
 
         // 步骤6: 保存数据到存储（使用存储适配器）
         try {
-            if (diff) {
-                const [subsHandled, profilesHandled] = await Promise.all([
-                    diff.subscriptions ? applyRowLevelDiff(storageAdapter, 'subscriptions', diff.subscriptions) : false,
-                    diff.profiles ? applyRowLevelDiff(storageAdapter, 'profiles', diff.profiles) : false
-                ]);
-
-                const saveTasks = [];
-                if (!subsHandled) saveTasks.push(storageAdapter.put(KV_KEY_SUBS, finalMisubs));
-                if (!profilesHandled) saveTasks.push(storageAdapter.put(KV_KEY_PROFILES, finalProfiles));
-                if (saveTasks.length > 0) {
-                    await Promise.all(saveTasks);
-                }
-            } else {
-                const [subsHandled, profilesHandled] = await Promise.all([
-                    syncCollectionRowLevel(storageAdapter, 'subscriptions', finalMisubs),
-                    syncCollectionRowLevel(storageAdapter, 'profiles', finalProfiles)
-                ]);
-
-                const saveTasks = [];
-                if (!subsHandled) saveTasks.push(storageAdapter.put(KV_KEY_SUBS, finalMisubs));
-                if (!profilesHandled) saveTasks.push(storageAdapter.put(KV_KEY_PROFILES, finalProfiles));
-                if (saveTasks.length > 0) {
-                    await Promise.all(saveTasks);
-                }
-            }
+            // 适配器自行决定行级写入（D1）还是整块覆盖（KV）；diff 存在时透传增量补丁。
+            await Promise.all([
+                storageAdapter.persistCollection('subscriptions', finalMisubs, diff ? (diff.subscriptions || null) : null),
+                storageAdapter.persistCollection('profiles', finalProfiles, diff ? (diff.profiles || null) : null)
+            ]);
         } catch (storageError) {
             console.error('[API Error /misubs] Storage put failed:', storageError);
             return createJsonResponse({
@@ -548,12 +452,11 @@ export async function handleSettingsReset(env) {
         // 使用存储适配器删除设置（会自动处理 KV 和 D1 映射）
         await storageAdapter.delete(KV_KEY_SETTINGS);
 
-        // 如果存在双存储配置，尝试同时清理另一端
+        // 如果存在双存储配置，尝试同时清理另一端（两端都删，幂等，无需判断主存储类型）
         try {
-            if (storageAdapter.type === STORAGE_TYPES.D1) {
-                const kvNs = StorageFactory.resolveKV(env);
-                if (kvNs) await kvNs.delete(KV_KEY_SETTINGS);
-            } else if (env.MISUB_DB) {
+            const kvNs = StorageFactory.resolveKV(env);
+            if (kvNs) await kvNs.delete(KV_KEY_SETTINGS);
+            if (env.MISUB_DB) {
                 const d1Adapter = StorageFactory.createAdapter(env, STORAGE_TYPES.D1);
                 await d1Adapter.delete(KV_KEY_SETTINGS);
             }
@@ -586,9 +489,7 @@ export async function handlePublicProfilesRequest(env) {
         const storageAdapter = await getStorageAdapter(env);
         const cachedSettings = await SettingsCache.get(env);
         const [profiles, settings] = await Promise.all([
-            typeof storageAdapter.getAllProfiles === 'function'
-                ? storageAdapter.getAllProfiles()
-                : storageAdapter.get(KV_KEY_PROFILES).then(res => res || []),
+            storageAdapter.getAllProfiles(),
             Promise.resolve(cachedSettings || {}).then(res => res || {})
         ]);
 
