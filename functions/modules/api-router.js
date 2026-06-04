@@ -58,6 +58,150 @@ function isAuthDiagnosticsEnabled(env) {
     return String(env?.ENABLE_AUTH_DIAGNOSTICS || '').toLowerCase() === 'true';
 }
 
+
+/**
+ * 路由表：声明式 { path/prefix, method?, auth, methods?/notAllowed?, errorWrap?, handler }。
+ * 取代原先的 if 链 + 30-case switch。各路由响应体保持与重构前逐字节一致
+ * （ok/success、字符串 vs 对象的 405 等不一致刻意保留，仅记录不归一化）。
+ *
+ * auth：'public' 无需登录 | 'required' 需登录（统一 401）| 'diagnostic' 诊断端点（关闭时 404）。
+ */
+const ROUTES = [
+    // —— 数据迁移接口（需登录；统一错误包装：try/catch -> createErrorResponse(error, 500)）——
+    { path: '/migrate_to_d1', auth: 'required', errorWrap: true, handler: async ({ env }) => {
+        if (!env.MISUB_DB) {
+            return createJsonResponse({ success: false, message: 'D1 数据库未配置，请检查 wrangler.toml 配置' }, 400);
+        }
+        const migrationResult = await DataMigrator.migrateKVToD1(env);
+        if (migrationResult.errors.length > 0) {
+            return createJsonResponse({ success: false, message: '迁移过程中出现错误', details: migrationResult.errors, partialSuccess: migrationResult }, 500);
+        }
+        return createJsonResponse({ success: true, message: '数据已成功迁移到 D1 数据库', details: migrationResult });
+    } },
+    { path: '/detect_legacy_d1', auth: 'required', errorWrap: true, handler: async ({ env }) => {
+        const result = await DataMigrator.detectLegacyD1MainRows(env);
+        return createJsonResponse({ success: true, data: result });
+    } },
+    { path: '/migrate_legacy_d1', auth: 'required', errorWrap: true, handler: async ({ env }) => {
+        const migrationResult = await DataMigrator.migrateLegacyD1MainRows(env);
+        if (migrationResult.errors.length > 0) {
+            return createJsonResponse({ success: false, message: '旧 D1 结构迁移过程中出现错误', details: migrationResult.errors, partialSuccess: migrationResult }, 500);
+        }
+        return createJsonResponse({ success: true, message: '旧 D1 结构已成功迁移为行级存储', details: migrationResult });
+    } },
+    { path: '/migrate', auth: 'required', errorWrap: true, handler: async ({ env }) => {
+        const kv = StorageFactory.resolveKV(env);
+        if (!kv) {
+            return createJsonResponse({ success: false, message: 'KV 未绑定' }, 400);
+        }
+        const oldData = await kv.get(OLD_KV_KEY).then(r => r ? JSON.parse(r) : null);
+        const newDataRaw = await kv.get(KV_KEY_SUBS);
+        if (newDataRaw !== null) {
+            return createJsonResponse({ success: true, message: '无需迁移，数据已是最新结构。' }, 200);
+        }
+        if (!oldData) {
+            return createJsonResponse({ success: false, message: '未找到需要迁移的旧数据。' }, 404);
+        }
+        await kv.put(KV_KEY_SUBS, JSON.stringify(oldData));
+        await kv.put(KV_KEY_PROFILES, JSON.stringify([]));
+        await kv.put(OLD_KV_KEY + '_migrated_on_' + new Date().toISOString(), JSON.stringify(oldData));
+        await kv.delete(OLD_KV_KEY);
+        return createJsonResponse({ success: true, message: '数据迁移成功！' }, 200);
+    } },
+
+    // —— 公开接口 ——
+    { path: '/login', auth: 'public', handler: ({ request, env }) => handleLogin(request, env) },
+    { path: ['/public_config', '/config'], auth: 'public', handler: ({ env }) => handlePublicConfig(env) },
+    { path: '/public/profiles', auth: 'public', handler: ({ env }) => handlePublicProfilesRequest(env) },
+    { path: '/public/preview', auth: 'public', handler: ({ request, env }) => handlePublicPreviewRequest(request, env) },
+    { path: '/public/guestbook', auth: 'public', methods: ['GET', 'POST'], notAllowed: () => createErrorResponse('Method Not Allowed', 405),
+      handler: ({ request, env }) => (request.method === 'GET' ? handleGuestbookGet(env) : handleGuestbookPost(request, env)) },
+    { path: '/telegram/webhook', auth: 'public', handler: async ({ request, env }) => {
+        const { handleTelegramWebhook } = await import('./handlers/telegram-webhook-handler.js');
+        return handleTelegramWebhook(request, env);
+    } },
+    { path: '/system/error_report', auth: 'public', handler: ({ request, env }) => handleErrorReportRequest(request, env) },
+    { prefix: '/clients', method: 'GET', auth: 'public', handler: ({ request, env }) => handleClientRequest(request, env) },
+    { path: '/data', auth: 'public', handler: async ({ request, env, context }) => {
+        if (!await authMiddleware(request, env)) {
+            return createJsonResponse({ authenticated: false, message: 'Not logged in' });
+        }
+        return handleDataRequest(env, context);
+    } },
+    { path: '/github/release', auth: 'public', handler: ({ request, env }) => handleGithubReleaseRequest(request, env) },
+    { path: '/logout', auth: 'public', handler: ({ request }) => handleLogout(request) },
+
+    // —— 诊断端点（默认关闭：未开启时返回 404，不需登录）——
+    { path: '/auth_debug', auth: 'diagnostic', handler: async ({ request, env }) => {
+        const debugInfo = await getAuthDebugInfo(env);
+        const authDiagnostic = await getAuthSessionDiagnostic(request, env);
+        return createJsonResponse({ success: true, auth: authDiagnostic, runtime: debugInfo });
+    } },
+    { path: '/auth_check', auth: 'diagnostic', methods: ['POST'], notAllowed: () => createJsonResponse({ error: 'Method Not Allowed' }, 405),
+      handler: async ({ request, env }) => {
+        const diagnostic = await getLoginPasswordDiagnostic(request, env);
+        return createJsonResponse(diagnostic, diagnostic.success ? 200 : 400);
+    } },
+
+    // —— 需登录接口 ——
+    { prefix: '/clients', auth: 'required', handler: ({ request, env }) => handleClientRequest(request, env) },
+    { path: '/test_notification', auth: 'required', handler: ({ request, env }) => handleTestNotificationRequest(request, env) },
+    { path: '/kv_test', auth: 'required', handler: ({ env }) => handleKvTestRequest(env) },
+    { path: '/misubs', auth: 'required', handler: ({ request, env }) => handleMisubsSave(request, env) },
+    { path: '/rule_templates', auth: 'required', handler: ({ request, env }) => handleRuleTemplatesRequest(request, env) },
+    { path: '/backup/export', auth: 'required', handler: ({ request, env }) => handleBackupExport(request, env) },
+    { path: '/backup/restore', auth: 'required', handler: ({ request, env }) => handleBackupRestore(request, env) },
+    { path: '/backup/webdav/status', auth: 'required', handler: ({ env }) => handleWebdavBackupStatus(env) },
+    { path: '/backup/webdav/test', auth: 'required', handler: ({ request, env }) => handleWebdavBackupTest(request, env) },
+    { path: '/backup/webdav/run', auth: 'required', handler: ({ request, env }) => handleManualWebdavBackup(request, env) },
+    { path: '/backup/webdav/list', auth: 'required', handler: ({ request, env }) => handleWebdavBackupList(request, env) },
+    { path: '/backup/webdav/restore', auth: 'required', handler: ({ request, env }) => handleWebdavRestore(request, env) },
+    { path: '/node_count', auth: 'required', handler: ({ request, env }) => handleLegacyNodeCountRequest(request, env) },
+    { path: '/nodes/health', auth: 'required', handler: ({ request, env }) => handleHealthCheckRequest(request, env) },
+    { path: '/nodes/clean', auth: 'required', handler: ({ request, env }) => handleCleanNodesRequest(request, env) },
+    { path: '/fetch_external_url', auth: 'required', handler: ({ request, env }) => handleExternalFetchRequest(request, env) },
+    { path: '/batch_update_nodes', auth: 'required', handler: ({ request, env }) => handleBatchUpdateNodesRequest(request, env) },
+    { path: '/subscription_nodes', auth: 'required', handler: ({ request, env }) => handleSubscriptionNodesRequest(request, env) },
+    { path: '/debug_subscription', auth: 'required', handler: ({ request, env }) => handleDebugSubscriptionRequest(request, env) },
+    { path: '/system/info', auth: 'required', handler: ({ request, env }) => handleSystemInfoRequest(request, env) },
+    { path: '/system/storage_test', auth: 'required', handler: ({ request, env }) => handleStorageTestRequest(request, env) },
+    { path: '/system/export', auth: 'required', handler: ({ request, env }) => handleExportDataRequest(request, env) },
+    { path: '/preview/content', auth: 'required', handler: ({ request, env }) => handlePreviewContentRequest(request, env) },
+    { path: '/parse_subscription', auth: 'required', handler: ({ request, env }) => handleParseSubscription(request, env) },
+    { path: '/subconverter/test', auth: 'required', handler: ({ request, env }) => handleSubconverterTestRequest(request, env) },
+    { path: '/logs', auth: 'required', methods: ['GET', 'DELETE'], notAllowed: () => createErrorResponse('Method Not Allowed', 405),
+      handler: async ({ request, env }) => {
+        const { LogService } = await import('../services/log-service.js');
+        if (request.method === 'GET') {
+            const logs = await LogService.getLogs(env);
+            return createJsonResponse({ success: true, data: logs }, 200, { 'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate' });
+        }
+        await LogService.clearLogs(env);
+        return createJsonResponse({ success: true });
+    } },
+    { path: '/settings', auth: 'required', methods: ['GET', 'POST'], notAllowed: () => createJsonResponse('Method Not Allowed', 405),
+      handler: ({ request, env }) => (request.method === 'GET' ? handleSettingsGet(env) : handleSettingsSave(request, env)) },
+    { path: '/settings/password', auth: 'required', handler: ({ request, env }) => handleUpdatePassword(request, env) },
+    { path: '/settings/reset', auth: 'required', methods: ['POST'], notAllowed: () => createErrorResponse('Method Not Allowed', 405),
+      handler: ({ env }) => handleSettingsReset(env) },
+    { path: '/guestbook/manage', auth: 'required', methods: ['GET', 'POST'], notAllowed: () => createErrorResponse('Method Not Allowed', 405),
+      handler: ({ request, env }) => (request.method === 'GET' ? handleGuestbookManageGet(env) : handleGuestbookManageAction(request, env)) },
+    { path: '/cron/status', auth: 'required', handler: ({ env }) => handleCronStatusRequest(env) },
+    { path: '/cron/trigger', auth: 'required', handler: ({ env }) => handleCronTriggerRequest(env) }
+];
+
+function matchRoute(route, path, method) {
+    if (route.prefix) {
+        if (!path.startsWith(route.prefix)) return false;
+    } else if (Array.isArray(route.path)) {
+        if (!route.path.includes(path)) return false;
+    } else if (route.path !== path) {
+        return false;
+    }
+    if (route.method && route.method !== method) return false;
+    return true;
+}
+
 /**
  * 处理主要的API请求
  * @param {Object} request - HTTP请求对象
@@ -67,417 +211,99 @@ function isAuthDiagnosticsEnabled(env) {
 export async function handleApiRequest(request, env, context = null) {
     const url = new URL(request.url);
     const path = url.pathname.replace(/^\/api/, '');
+    const ctx = { request, env, context: context || { env }, url, path };
 
-    // [新增] 数据存储迁移接口 (KV -> D1)
-    if (path === '/migrate_to_d1') {
-        if (!await authMiddleware(request, env)) {
-            return createJsonResponse({ error: 'Unauthorized' }, 401);
-        }
-        try {
-            if (!env.MISUB_DB) {
-                return createJsonResponse({
-                    success: false,
-                    message: 'D1 数据库未配置，请检查 wrangler.toml 配置'
-                }, 400);
-            }
-            const migrationResult = await DataMigrator.migrateKVToD1(env);
-            if (migrationResult.errors.length > 0) {
-                return createJsonResponse({
-                    success: false,
-                    message: '迁移过程中出现错误',
-                    details: migrationResult.errors,
-                    partialSuccess: migrationResult
-                }, 500);
-            }
-            return createJsonResponse({
-                success: true,
-                message: '数据已成功迁移到 D1 数据库',
-                details: migrationResult
-            });
+    for (const route of ROUTES) {
+        if (!matchRoute(route, path, request.method)) continue;
 
-        } catch (error) {
-            console.error('[API Error /migrate_to_d1]', error);
-            return createErrorResponse(error, 500);
-        }
-    }
-
-    if (path === '/detect_legacy_d1') {
-        if (!await authMiddleware(request, env)) {
-            return createJsonResponse({ error: 'Unauthorized' }, 401);
-        }
-        try {
-            const result = await DataMigrator.detectLegacyD1MainRows(env);
-            return createJsonResponse({ success: true, data: result });
-        } catch (error) {
-            console.error('[API Error /detect_legacy_d1]', error);
-            return createErrorResponse(error, 500);
-        }
-    }
-
-    if (path === '/migrate_legacy_d1') {
-        if (!await authMiddleware(request, env)) {
-            return createJsonResponse({ error: 'Unauthorized' }, 401);
-        }
-        try {
-            const migrationResult = await DataMigrator.migrateLegacyD1MainRows(env);
-            if (migrationResult.errors.length > 0) {
-                return createJsonResponse({
-                    success: false,
-                    message: '旧 D1 结构迁移过程中出现错误',
-                    details: migrationResult.errors,
-                    partialSuccess: migrationResult
-                }, 500);
-            }
-            return createJsonResponse({
-                success: true,
-                message: '旧 D1 结构已成功迁移为行级存储',
-                details: migrationResult
-            });
-        } catch (error) {
-            console.error('[API Error /migrate_legacy_d1]', error);
-            return createErrorResponse(error, 500);
-        }
-    }
-
-    // [新增] 安全的、可重复执行的迁移接口
-    if (path === '/migrate') {
-        if (!await authMiddleware(request, env)) {
-            return createJsonResponse({ error: 'Unauthorized' }, 401);
-        }
-        try {
-            const kv = StorageFactory.resolveKV(env);
-            if (!kv) {
-                return createJsonResponse({ success: false, message: 'KV 未绑定' }, 400);
-            }
-            const oldData = await kv.get(OLD_KV_KEY).then(r => r ? JSON.parse(r) : null);
-            const newDataRaw = await kv.get(KV_KEY_SUBS);
-            const newDataExists = newDataRaw !== null;
-
-            if (newDataExists) {
-                return createJsonResponse({ success: true, message: '无需迁移，数据已是最新结构。' }, 200);
-            }
-            if (!oldData) {
-                return createJsonResponse({ success: false, message: '未找到需要迁移的旧数据。' }, 404);
-            }
-
-            await kv.put(KV_KEY_SUBS, JSON.stringify(oldData));
-            await kv.put(KV_KEY_PROFILES, JSON.stringify([]));
-            await kv.put(OLD_KV_KEY + '_migrated_on_' + new Date().toISOString(), JSON.stringify(oldData));
-            await kv.delete(OLD_KV_KEY);
-
-            return createJsonResponse({ success: true, message: '数据迁移成功！' }, 200);
-        } catch (e) {
-            console.error('[API Error /migrate]', e);
-            return createErrorResponse(e, 500);
-        }
-    }
-
-    if (path === '/login') {
-        return await handleLogin(request, env);
-    }
-
-    if (path === '/public_config' || path === '/config') {
-        return await handlePublicConfig(env);
-    }
-
-    if (path === '/public/profiles') {
-        return await handlePublicProfilesRequest(env);
-    }
-
-    if (path === '/public/preview') {
-        return await handlePublicPreviewRequest(request, env);
-    }
-
-    // 留言板公开接口
-    if (path === '/public/guestbook') {
-        if (request.method === 'GET') {
-            return await handleGuestbookGet(env);
-        }
-        if (request.method === 'POST') {
-            return await handleGuestbookPost(request, env);
-        }
-        return createErrorResponse('Method Not Allowed', 405);
-    }
-
-    // Telegram Push Bot Webhook (公开接口，内部验证)
-    if (path === '/telegram/webhook') {
-        const { handleTelegramWebhook } = await import('./handlers/telegram-webhook-handler.js');
-        return await handleTelegramWebhook(request, env);
-    }
-
-    // Error report endpoint (public)
-    if (path === '/system/error_report') {
-        return await handleErrorReportRequest(request, env);
-    }
-
-    // Public GET access for clients
-    if (path.startsWith('/clients') && request.method === 'GET') {
-        return await handleClientRequest(request, env);
-    }
-
-    // Special handling for /data to return 200 OK for unauthenticated requests
-    if (path === '/data') {
-        if (!await authMiddleware(request, env)) {
-            return createJsonResponse({
-                authenticated: false,
-                message: 'Not logged in'
-            });
-        }
-
-
-        return await handleDataRequest(env, context || { env });
-    }
-
-    // [New] GitHub Proxy Route (Public)
-    if (path === '/github/release') {
-        return await handleGithubReleaseRequest(request, env);
-    }
-
-    // Logout 无需认证（cookie 过期时也需能正常登出）
-    if (path === '/logout') {
-        return await handleLogout(request);
-    }
-
-    // 认证调试端点（默认关闭，不返回敏感值）
-    if (path === '/auth_debug') {
-        if (!isAuthDiagnosticsEnabled(env)) {
+        if (route.auth === 'diagnostic' && !isAuthDiagnosticsEnabled(env)) {
             return createErrorResponse('Not Found', 404);
         }
-        const debugInfo = await getAuthDebugInfo(env);
-        const authDiagnostic = await getAuthSessionDiagnostic(request, env);
-
-        return createJsonResponse({
-            success: true,
-            auth: authDiagnostic,
-            runtime: debugInfo
-        });
+        if (route.auth === 'required' && !await authMiddleware(request, env)) {
+            return createJsonResponse({ error: 'Unauthorized' }, 401);
+        }
+        if (route.methods && !route.methods.includes(request.method)) {
+            return route.notAllowed();
+        }
+        if (route.errorWrap) {
+            try {
+                return await route.handler(ctx);
+            } catch (error) {
+                console.error(`[API Error ${path}]`, error);
+                return createErrorResponse(error, 500);
+            }
+        }
+        return await route.handler(ctx);
     }
 
-    // 登录密码调试端点（默认关闭，不返回敏感值）
-    if (path === '/auth_check') {
-        if (!isAuthDiagnosticsEnabled(env)) {
-            return createErrorResponse('Not Found', 404);
-        }
-        if (request.method !== 'POST') {
-            return createJsonResponse({ error: 'Method Not Allowed' }, 405);
-        }
-        const diagnostic = await getLoginPasswordDiagnostic(request, env);
-        return createJsonResponse(diagnostic, diagnostic.success ? 200 : 400);
-    }
-
+    // 未匹配任何路由：保持原全局鉴权门控语义（未登录 -> 401，已登录 -> 404）
     if (!await authMiddleware(request, env)) {
         return createJsonResponse({ error: 'Unauthorized' }, 401);
     }
+    return createErrorResponse('API route not found', 404);
+}
 
-    // Auth-only route for client management (POST, DELETE, etc.)
-    if (path.startsWith('/clients')) {
-        return await handleClientRequest(request, env);
-    }
-
-    if (path === '/test_notification') {
-        if (!await authMiddleware(request, env)) {
-            return createJsonResponse({ error: 'Unauthorized' }, 401);
+// KV 诊断端点处理器（测试 KV 读写是否正常；自带 try/catch，错误返回 createJsonResponse）
+async function handleKvTestRequest(env) {
+    try {
+        const kv = StorageFactory.resolveKV(env);
+        if (!kv) {
+            const envKeys = env ? Object.keys(env).map(k => {
+                const v = env[k];
+                const t = typeof v;
+                const isKVLike = v && t === 'object' && typeof v.get === 'function';
+                return `${k}(${t}${isKVLike ? ',KV-like' : ''})`;
+            }) : [];
+            return createJsonResponse({ success: false, error: 'KV 未绑定', envKeys });
         }
-        return await handleTestNotificationRequest(request, env);
-    }
+        const testKey = '__kv_test_' + Date.now();
+        const testValue = 'test_' + Math.random().toString(36).slice(2);
 
-    // KV 诊断端点：测试 KV 读写是否正常（需登录）
-    if (path === '/kv_test') {
+        let putError = null;
         try {
-            const kv = StorageFactory.resolveKV(env);
-            if (!kv) {
-                // 列出 env 中所有 key 及其类型，帮助诊断绑定情况
-                const envKeys = env ? Object.keys(env).map(k => {
-                    const v = env[k];
-                    const t = typeof v;
-                    const isKVLike = v && t === 'object' && typeof v.get === 'function';
-                    return `${k}(${t}${isKVLike ? ',KV-like' : ''})`;
-                }) : [];
-                return createJsonResponse({ success: false, error: 'KV 未绑定', envKeys });
-            }
-            const testKey = '__kv_test_' + Date.now();
-            const testValue = 'test_' + Math.random().toString(36).slice(2);
-
-            // 写入
-            let putError = null;
-            try {
-                await kv.put(testKey, testValue);
-            } catch (e) {
-                putError = e.message;
-            }
-
-            // 读回
-            let readBack = null;
-            let getError = null;
-            try {
-                readBack = await kv.get(testKey);
-            } catch (e) {
-                getError = e.message;
-            }
-
-            // 清理
-            try { await kv.delete(testKey); } catch (_) {}
-
-            // 读取实际数据键
-            let subsRaw = null;
-            let subsError = null;
-            try {
-                subsRaw = await kv.get('misub_subscriptions_v1');
-            } catch (e) {
-                subsError = e.message;
-            }
-
-            let settingsRaw = null;
-            try {
-                settingsRaw = await kv.get('worker_settings_v1');
-            } catch (_) {}
-
-            return createJsonResponse({
-                success: true,
-                kvBound: true,
-                writeTest: {
-                    wrote: testValue,
-                    readBack,
-                    match: readBack === testValue,
-                    putError,
-                    getError
-                },
-                actualData: {
-                    subscriptions: subsRaw ? `存在，长度=${subsRaw.length}` : 'null（空）',
-                    settings: settingsRaw ? `存在，长度=${settingsRaw.length}` : 'null（空）',
-                    subsError
-                }
-            });
+            await kv.put(testKey, testValue);
         } catch (e) {
-            return createJsonResponse({ success: false, error: e.message });
+            putError = e.message;
         }
-    }
 
-    switch (path) {
-        case '/misubs':
-            return await handleMisubsSave(request, env);
+        let readBack = null;
+        let getError = null;
+        try {
+            readBack = await kv.get(testKey);
+        } catch (e) {
+            getError = e.message;
+        }
 
-        case '/rule_templates':
-            return await handleRuleTemplatesRequest(request, env);
+        try { await kv.delete(testKey); } catch (_) {}
 
-        case '/backup/export':
-            return await handleBackupExport(request, env);
+        let subsRaw = null;
+        let subsError = null;
+        try {
+            subsRaw = await kv.get('misub_subscriptions_v1');
+        } catch (e) {
+            subsError = e.message;
+        }
 
-        case '/backup/restore':
-            return await handleBackupRestore(request, env);
+        let settingsRaw = null;
+        try {
+            settingsRaw = await kv.get('worker_settings_v1');
+        } catch (_) {}
 
-        case '/backup/webdav/status':
-            return await handleWebdavBackupStatus(env);
-
-        case '/backup/webdav/test':
-            return await handleWebdavBackupTest(request, env);
-
-        case '/backup/webdav/run':
-            return await handleManualWebdavBackup(request, env);
-
-        case '/backup/webdav/list':
-            return await handleWebdavBackupList(request, env);
-
-        case '/backup/webdav/restore':
-            return await handleWebdavRestore(request, env);
-
-        case '/node_count':
-            return await handleLegacyNodeCountRequest(request, env);
-
-        case '/nodes/health':
-            return await handleHealthCheckRequest(request, env);
-
-        case '/nodes/clean':
-            return await handleCleanNodesRequest(request, env);
-
-        case '/fetch_external_url':
-            return await handleExternalFetchRequest(request, env);
-
-        case '/batch_update_nodes':
-            return await handleBatchUpdateNodesRequest(request, env);
-
-        case '/subscription_nodes':
-            return await handleSubscriptionNodesRequest(request, env);
-
-        case '/debug_subscription':
-            return await handleDebugSubscriptionRequest(request, env);
-
-        case '/system/info':
-            return await handleSystemInfoRequest(request, env);
-
-        case '/system/storage_test':
-            return await handleStorageTestRequest(request, env);
-
-        case '/system/export':
-            return await handleExportDataRequest(request, env);
-
-        case '/preview/content':
-            return await handlePreviewContentRequest(request, env);
-
-        case '/parse_subscription':
-            return await handleParseSubscription(request, env);
-
-        case '/subconverter/test':
-            return await handleSubconverterTestRequest(request, env);
-
-        case '/logs':
-            if (request.method === 'GET') {
-                const { LogService } = await import('../services/log-service.js');
-                const logs = await LogService.getLogs(env);
-                return createJsonResponse({ success: true, data: logs }, 200, {
-                    'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate'
-                });
+        return createJsonResponse({
+            success: true,
+            kvBound: true,
+            writeTest: { wrote: testValue, readBack, match: readBack === testValue, putError, getError },
+            actualData: {
+                subscriptions: subsRaw ? `存在，长度=${subsRaw.length}` : 'null（空）',
+                settings: settingsRaw ? `存在，长度=${settingsRaw.length}` : 'null（空）',
+                subsError
             }
-            if (request.method === 'DELETE') {
-                const { LogService } = await import('../services/log-service.js');
-                await LogService.clearLogs(env);
-                return createJsonResponse({ success: true });
-            }
-            return createErrorResponse('Method Not Allowed', 405);
-
-        case '/settings':
-            if (request.method === 'GET') {
-                return await handleSettingsGet(env);
-            }
-            if (request.method === 'POST') {
-                return await handleSettingsSave(request, env);
-            }
-            return createJsonResponse('Method Not Allowed', 405);
-
-        case '/settings/password':
-            return await handleUpdatePassword(request, env);
-
-        case '/settings/reset':
-            if (request.method === 'POST') {
-                return await handleSettingsReset(env);
-            }
-            return createErrorResponse('Method Not Allowed', 405);
-
-        case '/guestbook/manage':
-            if (request.method === 'GET') {
-                return await handleGuestbookManageGet(env);
-            }
-            if (request.method === 'POST') {
-                return await handleGuestbookManageAction(request, env);
-            }
-            return createErrorResponse('Method Not Allowed', 405);
-
-        case '/cron/status':
-            if (!await authMiddleware(request, env)) {
-                return createJsonResponse({ error: 'Unauthorized' }, 401);
-            }
-            return await handleCronStatusRequest(env);
-
-        case '/cron/trigger':
-            if (!await authMiddleware(request, env)) {
-                return createJsonResponse({ error: 'Unauthorized' }, 401);
-            }
-            return await handleCronTriggerRequest(env);
-
-        default:
-            return createErrorResponse('API route not found', 404);
+        });
+    } catch (e) {
+        return createJsonResponse({ success: false, error: e.message });
     }
 }
+
 
 export async function handleSubconverterTestRequest(request, env) {
     if (request.method !== 'POST') {
