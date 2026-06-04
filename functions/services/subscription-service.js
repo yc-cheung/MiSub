@@ -9,6 +9,7 @@ import { getProcessedUserAgent } from '../utils/format-utils.js';
 import { buildFetchProxyUrl } from '../utils/fetch-proxy-utils.js';
 import { prependNodeName, addFlagEmoji, removeFlagEmoji, fixNodeUrlEncoding, sanitizeNodeForYaml } from '../utils/node-utils.js';
 import { runOperatorChain } from '../utils/operator-runner.js';
+import { adaptLegacyTransform } from '../utils/legacy-transform-adapter.js';
 import { createTimeoutFetch } from '../modules/utils.js';
 import { assertPublicNetworkUrl } from '../modules/security-utils.js';
 
@@ -795,28 +796,6 @@ function applyFilterRules(validNodes, sub) {
         : afterExclude;
 }
 
-/**
- * 应用订阅治理转换：算子链 + 基于文本的过滤
- * @param {string[]} nodeUrls 
- * @param {Object} sub 
- * @returns {Promise<string[]>}
- */
-async function applySubscriptionTransforms(nodeUrls, sub) {
-    if (!nodeUrls || nodeUrls.length === 0) return [];
-    
-    let processed = [...nodeUrls];
-    
-    // 1. 应用算子链 (如果有算子定义)
-    if (Array.isArray(sub.operators) && sub.operators.length > 0) {
-        processed = await runOperatorChain(processed, sub.operators);
-    }
-    
-    // 2. 应用传统的过滤规则 (exclude/include)
-    processed = applyFilterRules(processed, sub);
-    
-    return processed;
-}
-
 function buildRuleSet(lines, stripKeepPrefix = false) {
     const protocols = new Set();
     const patterns = [];
@@ -896,91 +875,6 @@ function filterNodes(nodes, rules, mode = 'exclude') {
 }
 
 
-/**
- * 桥接模式：将旧版 NodeTransform 配置转换为新的 Operator 列表
- * @param {Object} config - 旧版配置对象
- * @returns {Array} - 转换后的操作符列表
- */
-function adaptLegacyTransform(config) {
-    if (!config || !config.enabled) return [];
-    
-    const ops = [];
-
-    // 1. 过滤器 (Filter)
-    const filter = config.filter;
-    if (filter && (filter.include?.enabled || filter.exclude?.enabled || filter.protocols?.enabled || filter.regions?.enabled || filter.script?.enabled || filter.useless?.enabled)) {
-        ops.push({ 
-            id: 'legacy-filter',
-            type: 'filter', 
-            enabled: true, 
-            params: { ...filter } 
-        });
-    }
-
-    // 2. 正则重命名 (Regex Rename)
-    const regex = config.rename?.regex;
-    if (regex?.enabled && regex.rules?.length > 0) {
-        ops.push({ 
-            id: 'legacy-rename-regex',
-            type: 'rename', 
-            enabled: true, 
-            params: { regex: { ...regex } } 
-        });
-    }
-
-    // 3. 模板重命名 (Template Rename)
-    const template = config.rename?.template;
-    if (template?.enabled) {
-        ops.push({ 
-            id: 'legacy-rename-template',
-            type: 'rename', 
-            enabled: true, 
-            params: { 
-                template: { 
-                    enabled: true, 
-                    template: template.template || '{emoji}{region}-{protocol}-{index}', 
-                    offset: template.indexStart || 1,
-                    indexScope: template.indexScope || 'region'
-                } 
-            } 
-        });
-    }
-
-    // 4. 重命名脚本 (Script Rename)
-    const renameScript = config.rename?.script;
-    if (renameScript?.enabled && renameScript.expression) {
-        ops.push({
-            id: 'legacy-rename-script',
-            type: 'script',
-            enabled: true,
-            params: { code: `return ($nodes) => { return $nodes.map(n => { n.name = (${renameScript.expression})(n.name, n); return n; }); }` }
-        });
-    }
-
-    // 5. 去重 (Dedup)
-    const dedup = config.dedup;
-    if (dedup?.enabled) {
-        ops.push({ 
-            id: 'legacy-dedup',
-            type: 'dedup', 
-            enabled: true, 
-            params: { ...dedup } 
-        });
-    }
-
-    // 6. 排序 (Sort)
-    const sort = config.sort;
-    if (sort?.enabled && sort.keys?.length > 0) {
-        ops.push({ 
-            id: 'legacy-sort',
-            type: 'sort', 
-            enabled: true, 
-            params: { ...sort } 
-        });
-    }
-
-    return ops;
-}
 
 /**
  * ArrayBuffer -> Base64 ??
