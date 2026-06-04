@@ -122,7 +122,8 @@ functions/modules/handlers/
 ├─ node-handler.js          # 节点统计、健康检查、批量更新
 ├─ debug-handler.js         # 调试与系统信息接口
 ├─ error-report-handler.js  # 前端错误上报
-└─ telegram-webhook-handler.js # Telegram Bot 推送回调
+├─ telegram-webhook-handler.js # Telegram Bot 推送回调
+└─ telegram-transport.js    # Telegram send/edit/answer 传输适配器
 ```
 
 #### 2. 订阅处理 (`functions/modules/subscription/`)
