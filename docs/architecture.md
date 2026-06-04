@@ -205,13 +205,11 @@ functions/modules/subscription/main-handler.js
     ├── 读取 settings / profiles / subscriptions
     ├── resolveTarget()               # profile/token → { targetMisubs, subName, currentProfile, isProfileExpired }
     ├── resolveGenerationSettings()   # 引擎/模板/规则等级 + 前缀/节点变换/算子/URL 覆盖（统一组装）
-    ├── resolveNodeListWithCache()    # 根据配置读缓存或生成节点
-    ├── generateCombinedNodeList()    # 拉取并合并节点
-    ├── ProcessorService              # 节点后处理
-    ├── 判断目标格式                   # UA 和 URL 参数共同决定
-    ├── 内置生成器或外部 subconverter
-    ├── 写入缓存、访问日志、下载计数
-    └── 返回订阅响应
+    ├── resolveNodeListWithCache()    # 读缓存或调 refreshNodes(generateCombinedNodeList) 生成节点
+    └── renderResponse()              # 输出阶段：nodes / external-redirect / base64 / builtin / base64-fallback
+        ├── ProcessorService          # 内置生成器节点后处理
+        ├── 内置生成器或外部 subconverter
+        └── notifyAndLogAccess()      # 各输出分支统一的访问通知 + 访问日志（按标签/格式参数化）
 ```
 
 关键文件：
