@@ -1,6 +1,7 @@
 <script setup>
 import { ref, defineAsyncComponent } from 'vue';
 import { useDataStore } from '../stores/useDataStore.js';
+import { useSettingsStore } from '../stores/settings.js';
 import { useProfiles } from '../composables/useProfiles.js';
 import ProfilePanel from '../components/profiles/ProfilePanel.vue';
 import Modal from '../components/forms/Modal.vue';
@@ -85,7 +86,7 @@ const QRCodeModal = defineAsyncComponent(() => import('../components/modals/QRCo
 const showQRCodeModal = ref(false);
 const qrCodeUrl = ref('');
 const qrCodeTitle = ref('');
-const { settings } = storeToRefs(dataStore); // Check if settings is already imported or available from dataStore
+const { config: settings } = storeToRefs(useSettingsStore());
 
 const handleQRCode = (profileId) => {
   const profile = profiles.value.find(p => p.id === profileId || p.customId === profileId);

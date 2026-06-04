@@ -316,7 +316,7 @@ const updateSelectedIds = (listName, newIds) => {
           :ui-text="uiText"
           :prefix-toggle-options="prefixToggleOptions" 
           :group-prefix-toggle-options="groupPrefixToggleOptions"
-          :global-settings="dataStore.settings"
+          :global-settings="settingsStore.config"
           @toggle-advanced="showAdvanced = !showAdvanced" 
         />
 

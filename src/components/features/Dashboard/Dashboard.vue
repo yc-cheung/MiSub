@@ -4,6 +4,7 @@ import { formatBytes } from '../../../lib/utils.js';
 import { useToastStore } from '../../../stores/toast.js';
 import { useUIStore } from '../../../stores/ui.js';
 import { useDataStore } from '../../../stores/useDataStore.js';
+import { useSettingsStore } from '../../../stores/settings.js';
 import { useSubscriptions } from '../../../composables/useSubscriptions.js';
 import { useManualNodes } from '../../../composables/useManualNodes.js';
 import { useProfiles } from '../../../composables/useProfiles.js';
@@ -42,8 +43,23 @@ const props = defineProps({ data: Object });
 const { showToast } = useToastStore();
 const uiStore = useUIStore();
 const dataStore = useDataStore();
-const { settings, isDirty, isLoading } = storeToRefs(dataStore); // Use store refs
+const settingsStore = useSettingsStore();
+const { isDirty, isLoading } = storeToRefs(dataStore); // Use store refs
+const { config: settings } = storeToRefs(settingsStore); // Single settings source
 const config = settings; // Compatibility alias for template
+
+// Dashboard 弹窗状态统一由 uiStore 持有（保持同名，handlers/模板无需改动）
+const {
+  showQRCodeModal, qrCodeUrl, qrCodeTitle,
+  showCopyModal, showCopyModalProfile,
+  showDeleteSubsModal, showDeleteNodesModal, showSubscriptionImportModal,
+  showLogModal, logProfileName,
+  showBatchDeleteModal, batchDeleteIds,
+  showDedupModal, dedupPlan,
+  showBatchGroupModal, batchGroupIds,
+  showNodePreviewModal, previewSubscriptionId, previewProfileId,
+  previewSubscriptionName, previewSubscriptionUrl, previewProfileName
+} = storeToRefs(uiStore);
 const { clearDirty } = dataStore; // Don't destructure markDirty directly
 if (isDev) {
   console.debug('Dashboard: setup running');
@@ -63,11 +79,6 @@ const markDirty = () => {
 const isSortingSubs = ref(false);
 const isSortingNodes = ref(false);
 const manualNodeViewMode = ref('card');
-const showQRCodeModal = ref(false);
-const qrCodeUrl = ref('');
-const qrCodeTitle = ref('');
-const showCopyModal = ref(false);
-const showCopyModalProfile = ref(null);
 
 const handleQRCode = (id, type = 'subscription') => {
   if (type === 'subscription') {
@@ -158,27 +169,6 @@ const {
 
 // 使用备份 composable
 const { exportBackup, importBackup } = useBackupLogic();
-
-// --- UI State ---
-const showDeleteSubsModal = ref(false);
-const showDeleteNodesModal = ref(false);
-const showSubscriptionImportModal = ref(false);
-const showLogModal = ref(false);
-const logProfileName = ref('');
-const showBatchDeleteModal = ref(false);
-const batchDeleteIds = ref([]);
-const showDedupModal = ref(false);
-const dedupPlan = ref(null);
-const showBatchGroupModal = ref(false); // Added
-const batchGroupIds = ref([]); // Added
-
-// 节点预览相关状态
-const showNodePreviewModal = ref(false);
-const previewSubscriptionId = ref(null);
-const previewProfileId = ref(null);
-const previewSubscriptionName = ref('');
-const previewSubscriptionUrl = ref('');
-const previewProfileName = ref('');
 
 
 

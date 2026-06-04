@@ -6,6 +6,7 @@ import { useThemeStore } from './stores/theme';
 import { useSessionStore } from './stores/session';
 import { useToastStore } from './stores/toast';
 import { useDataStore } from './stores/useDataStore';
+import { useSettingsStore } from './stores/settings';
 import { useUIStore } from './stores/ui';
 import { useVersionStore } from './stores/version';
 import { storeToRefs } from 'pinia';
@@ -37,6 +38,8 @@ const toastStore = useToastStore();
 
 const dataStore = useDataStore();
 const { isDirty, saveState } = storeToRefs(dataStore);
+
+const settingsStore = useSettingsStore();
 
 const uiStore = useUIStore();
 const { layoutMode } = storeToRefs(uiStore);
@@ -102,7 +105,7 @@ const loginComponent = computed(() => {
 });
 
 const isDefaultPassword = computed(() => {
-  return sessionStore.subscriptionConfig?.isDefaultPassword === true
+  return settingsStore.config?.isDefaultPassword === true
     || sessionStore.securityWarning?.type === 'default_admin_password';
 });
 const defaultPasswordWarningMessage = computed(() => (

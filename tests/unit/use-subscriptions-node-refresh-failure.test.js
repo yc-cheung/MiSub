@@ -21,6 +21,10 @@ vi.mock('../../src/stores/useDataStore', () => ({
   })
 }));
 
+vi.mock('../../src/stores/settings', () => ({
+  useSettingsStore: () => ({ config: {} })
+}));
+
 vi.mock('../../src/stores/toast.js', () => ({
   useToastStore: () => ({
     showToast: mocks.showToast

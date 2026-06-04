@@ -10,7 +10,6 @@ import { useDataStore } from './useDataStore';
 export const useSessionStore = defineStore('session', () => {
   const sessionState = ref('loading'); // loading, loggedIn, loggedOut
   const initialData = ref(null);
-  const subscriptionConfig = ref({}); // [NEW] Added subscriptionConfig
   const securityWarning = ref(null);
   const defaultPublicConfig = Object.freeze({
     enablePublicPage: true,
@@ -50,9 +49,6 @@ export const useSessionStore = defineStore('session', () => {
 
     if (dataResult.success) {
       initialData.value = dataResult.data;
-      if (dataResult.data.config) {
-        subscriptionConfig.value = dataResult.data.config;
-      }
 
       // 直接注入数据到 dataStore，避免 Dashboard 重复请求
       const dataStore = useDataStore();
@@ -109,5 +105,5 @@ export const useSessionStore = defineStore('session', () => {
     router.push({ path: '/' });
   }
 
-  return { sessionState, initialData, publicConfig, subscriptionConfig, securityWarning, checkSession, login, logout };
+  return { sessionState, initialData, publicConfig, securityWarning, checkSession, login, logout };
 });

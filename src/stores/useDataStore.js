@@ -22,7 +22,6 @@ export const useDataStore = defineStore('data', () => {
     const subscriptions = ref([]);
     const profiles = ref([]);
     const ruleTemplates = ref([]);
-    const settings = computed(() => settingsStore.config);
 
     // Store Status
     const isLoading = ref(false);
@@ -396,7 +395,6 @@ export const useDataStore = defineStore('data', () => {
         subscriptions,
         profiles,
         ruleTemplates,
-        settings,
         isLoading,
         saveState,
         lastUpdated,

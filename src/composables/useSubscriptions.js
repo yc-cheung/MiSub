@@ -2,6 +2,7 @@
 import { ref, computed } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useDataStore } from '../stores/useDataStore';
+import { useSettingsStore } from '../stores/settings';
 import { useToastStore } from '../stores/toast.js';
 import { fetchNodeCount, batchUpdateNodes } from '../lib/api.js';
 import { handleError } from '../utils/errorHandler.js';
@@ -12,6 +13,7 @@ const isDev = import.meta.env.DEV;
 export function useSubscriptions(markDirty) {
   const { showToast } = useToastStore();
   const dataStore = useDataStore();
+  const settingsStore = useSettingsStore();
   // Rename the store ref to avoid confusion, as it contains ALL items
   const { subscriptions: allSubscriptions } = storeToRefs(dataStore);
 
@@ -330,7 +332,7 @@ export function useSubscriptions(markDirty) {
     if (intervalMinutes !== null) {
       intervalMs = intervalMinutes * 60 * 1000;
     } else {
-      const settings = dataStore.settings;
+      const settings = settingsStore.config;
       const settingsInterval = settings?.autoUpdateInterval;
       intervalMs = (settingsInterval != null && settingsInterval > 0)
         ? settingsInterval * 60 * 1000

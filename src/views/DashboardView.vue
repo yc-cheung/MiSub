@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref, defineAsyncComponent } from 'vue';
 import { useDataStore } from '../stores/useDataStore.js';
+import { useSettingsStore } from '../stores/settings.js';
 import { useBulkImportLogic } from '../composables/useBulkImportLogic.js';
 import { storeToRefs } from 'pinia';
 import SkeletonLoader from '../components/ui/SkeletonLoader.vue';
@@ -14,7 +15,8 @@ import StatCards from '../components/features/Dashboard/StatCards.vue';
 import { getDashboardHealthItems, shouldShowFullGuide } from '../utils/dashboard-health.js';
 
 const dataStore = useDataStore();
-const { settings, profiles, isLoading, lastUpdated } = storeToRefs(dataStore);
+const { profiles, isLoading, lastUpdated } = storeToRefs(dataStore);
+const { config: settings } = storeToRefs(useSettingsStore());
 const { activeProfiles, markDirty } = dataStore;
 
 const {

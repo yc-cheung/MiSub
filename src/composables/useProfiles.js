@@ -1,13 +1,16 @@
 import { ref, computed } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useDataStore } from '../stores/useDataStore';
+import { useSettingsStore } from '../stores/settings';
 import { useToastStore } from '../stores/toast';
 import { generateProfileId } from '../utils/id.js';
 
 export function useProfiles(markDirty) {
   const { showToast } = useToastStore();
   const dataStore = useDataStore();
-  const { profiles, settings } = storeToRefs(dataStore);
+  const settingsStore = useSettingsStore();
+  const { profiles } = storeToRefs(dataStore);
+  const { config: settings } = storeToRefs(settingsStore);
 
   /* Pagination setup */
   const isNewProfile = ref(false);
