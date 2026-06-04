@@ -2,8 +2,8 @@ import { StorageFactory } from '../../storage-adapter.js';
 import { createJsonResponse } from '../utils.js';
 import { parseNodeInfo } from '../utils/geo-utils.js';
 import { calculateProtocolStats, calculateRegionStats } from '../utils/node-parser.js';
-import { applyNodeTransformPipeline } from '../../utils/node-transformer.js';
 import { runOperatorChain } from '../../utils/operator-runner.js';
+import { adaptLegacyTransform } from '../../utils/legacy-transform-adapter.js';
 import { KV_KEY_SUBS, KV_KEY_PROFILES, KV_KEY_SETTINGS, DEFAULT_SETTINGS } from '../config.js';
 import { fetchSubscriptionNodes } from './node-fetcher.js';
 import { applyManualNodeName } from '../utils/node-cleaner.js';
@@ -20,60 +20,6 @@ function ensureArray(data) {
         }
     }
     return [];
-}
-
-function adaptLegacyTransform(config) {
-    if (!config || !config.enabled) return [];
-
-    const ops = [];
-    const filter = config.filter;
-    if (filter && (filter.include?.enabled || filter.exclude?.enabled || filter.protocols?.enabled || filter.regions?.enabled || filter.script?.enabled || filter.useless?.enabled)) {
-        ops.push({ id: 'legacy-filter', type: 'filter', enabled: true, params: { ...filter } });
-    }
-
-    const regex = config.rename?.regex;
-    if (regex?.enabled && regex.rules?.length > 0) {
-        ops.push({ id: 'legacy-rename-regex', type: 'rename', enabled: true, params: { regex: { ...regex } } });
-    }
-
-    const template = config.rename?.template;
-    if (template?.enabled) {
-        ops.push({
-            id: 'legacy-rename-template',
-            type: 'rename',
-            enabled: true,
-            params: {
-                template: {
-                    enabled: true,
-                    template: template.template || '{emoji}{region}-{protocol}-{index}',
-                    offset: template.indexStart || 1,
-                    indexScope: template.indexScope || 'region'
-                }
-            }
-        });
-    }
-
-    const renameScript = config.rename?.script;
-    if (renameScript?.enabled && renameScript.expression) {
-        ops.push({
-            id: 'legacy-rename-script',
-            type: 'script',
-            enabled: true,
-            params: { dsl: [{ action: 'rename', template: renameScript.expression }] }
-        });
-    }
-
-    const dedup = config.dedup;
-    if (dedup?.enabled) {
-        ops.push({ id: 'legacy-dedup', type: 'dedup', enabled: true, params: { ...dedup } });
-    }
-
-    const sort = config.sort;
-    if (sort?.enabled && sort.keys?.length > 0) {
-        ops.push({ id: 'legacy-sort', type: 'sort', enabled: true, params: { ...sort } });
-    }
-
-    return ops;
 }
 
 /**
@@ -196,19 +142,14 @@ export async function handleProfileMode(request, env, profileId, userAgent, appl
             });
         }
 
+        // 旧版 nodeTransform 已在上面经 adaptLegacyTransform 统一为 operators，
+        // 这里只剩 operator chain 一条管线；适配器产出空算子（启用但无任何子功能）时节点原样透传。
         let transformedUrls = nodeUrls;
         if (activeOperators.length > 0) {
             transformedUrls = await runOperatorChain(nodeUrls, activeOperators, {
                 subName: profile?.name,
                 userAgent,
                 config: settings
-            });
-        } else if (effectiveNodeTransform?.enabled) {
-            const defaultTemplate = '{emoji}{region}-{protocol}-{index}';
-            const effectiveTemplate = effectiveNodeTransform.rename?.template?.template || defaultTemplate;
-            transformedUrls = applyNodeTransformPipeline(nodeUrls, {
-                ...effectiveNodeTransform,
-                enableEmoji: settings.enableFlagEmoji !== false && effectiveTemplate.includes('{emoji}')
             });
         }
 

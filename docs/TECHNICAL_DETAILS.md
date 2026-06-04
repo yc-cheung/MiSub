@@ -12,7 +12,7 @@
 2. **清洗 (Cleaning)**：初步修复破损的节点 URL，移除已知无法识别的非法字符。
 3. **执行操作符链 (Operator Chain Executor)**：
    - 优先级：`订阅组操作符 (Profile Operators)` > `全局操作符 (Global Operators)`。
-   - 兼容逻辑：若两者皆无且存在旧版配置，则通过 `adaptLegacyTransform` 进行桥接。
+   - 兼容逻辑：若两者皆无且存在旧版配置，则通过 `adaptLegacyTransform` 桥接为算子。该桥接是唯一来源（`functions/utils/legacy-transform-adapter.js`），profile-handler 与 subscription-service 共用，旧版 `nodeTransform` 只经此一条路径进入算子链——不再有 `applyNodeTransformPipeline` 旁路。
 4. **格式生成 (Generator)**：将处理后的通用节点模型转换为 Clash、Sing-Box 等目标格式。
 
 ---
