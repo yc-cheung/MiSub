@@ -111,7 +111,7 @@
 
 ## 最大复杂热点
 
-1. `functions/modules/handlers/telegram-webhook-handler.js`：约 2748 行，Bot 命令、权限、存储、消息格式混合。
+1. `functions/modules/handlers/telegram-webhook-handler.js`：约 2700 行，Bot 命令、权限、存储、消息格式混合。已加 characterization 测试（命令分发表 + 各类代表命令 + 入口校验），并抽出传输适配器 `telegram-transport.js`（send/edit/answer 单一接口，测试可注入 fake）；后续拆分以此为安全网继续推进。
 2. ~~`functions/utils/url-to-clash.js`：约 1382 行，协议分支复杂。~~ 已拆为 `functions/utils/protocol-adapters/` 协议适配器注册表（每协议一个 `{ parse, build }`，传输层共享），`url-to-clash.js` / `clash-to-url.js` 退化为按 scheme/type 查表分发的薄封装。
 3. `functions/services/subscription-service.js`：约 997 行，拉取、缓存、过滤、统计、写回混合。
 4. `functions/modules/subscription/main-handler.js`：约 919 行，订阅主链路职责集中。
@@ -159,6 +159,7 @@
 
 ## 不建议立即做的事
 
-- 不直接拆 `telegram-webhook-handler.js` 或 `main-handler.js` 的大块业务逻辑。
+- `telegram-webhook-handler.js` 已建立 characterization 安全网并抽出传输适配器；继续拆分（命令处理器、callback 处理）应在此基础上小步推进。
+- 不直接拆 `main-handler.js` 的大块业务逻辑。
 - 不在没有 fixture 的情况下重写协议转换器。
 - 不把 coverage 纳入 CI，除非先补齐 `@vitest/coverage-v8` 并跑通。
