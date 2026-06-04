@@ -280,8 +280,10 @@ maxSubscriptionConcurrency
 
 ```text
 functions/modules/utils/node-parser.js     # 订阅内容解析，含 Clash YAML → 节点 URL
-functions/utils/clash-to-url.js            # Clash proxy 对象 → 节点 URL
-functions/utils/url-to-clash.js            # 节点 URL → Clash proxy / Clash config
+functions/utils/protocol-adapters/         # 协议适配器注册表：每协议一个 { parse, build }
+functions/utils/protocol-adapters/shared.js # 低层编解码 + 传输层(ws/grpc/h2/reality)子适配器
+functions/utils/clash-to-url.js            # Clash proxy 对象 → 节点 URL（按 type 查表分发）
+functions/utils/url-to-clash.js            # 节点 URL → Clash proxy / Clash config（按 scheme 查表分发）
 functions/utils/node-utils.js              # 节点命名、国旗、编码修正、YAML 安全处理
 functions/utils/node-transformer.js        # 节点 record 化、过滤、重命名、排序、去重
 functions/utils/operator-runner.js         # 新版操作符链执行

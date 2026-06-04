@@ -42,8 +42,9 @@
 
 ### 协议转换与模板
 
-- `functions/utils/url-to-clash.js`：URL 节点转 Clash proxy，体量最大、协议分支多。
-- `functions/utils/clash-to-url.js`：Clash proxy 转 URL 节点。
+- `functions/utils/protocol-adapters/`：协议适配器注册表，每协议一个 `{ parse(url), build(record) }`，传输层（ws/grpc/h2/reality）走 `shared.js` 子适配器。
+- `functions/utils/url-to-clash.js`：URL 节点转 Clash proxy，按 scheme 查表分发。
+- `functions/utils/clash-to-url.js`：Clash proxy 转 URL 节点，按 type 查表分发。
 - `functions/modules/utils/node-parser.js`：节点文本、Base64、Clash YAML、raw line 解析。
 - `functions/modules/subscription/builtin-*-generator.js`：Clash / Sing-box / Surge / Loon / QuanX / Egern 内置输出。
 - `functions/modules/subscription/template-pipeline.js` 与 `template-renderers/*`：模板模型与多目标渲染。
@@ -111,7 +112,7 @@
 ## 最大复杂热点
 
 1. `functions/modules/handlers/telegram-webhook-handler.js`：约 2748 行，Bot 命令、权限、存储、消息格式混合。
-2. `functions/utils/url-to-clash.js`：约 1382 行，协议分支复杂。
+2. ~~`functions/utils/url-to-clash.js`：约 1382 行，协议分支复杂。~~ 已拆为 `functions/utils/protocol-adapters/` 协议适配器注册表（每协议一个 `{ parse, build }`，传输层共享），`url-to-clash.js` / `clash-to-url.js` 退化为按 scheme/type 查表分发的薄封装。
 3. `functions/services/subscription-service.js`：约 997 行，拉取、缓存、过滤、统计、写回混合。
 4. `functions/modules/subscription/main-handler.js`：约 919 行，订阅主链路职责集中。
 5. `functions/modules/api-router.js`：约 910 行，路由权限边界需要显式化。
@@ -141,7 +142,8 @@
 
 ### 优先级 4：为协议转换加 fixture 快照
 
-- 在继续拆 `url-to-clash.js` 或 `node-parser.js` 前，先补典型协议 fixture。
+- `url-to-clash.js` / `clash-to-url.js` 已拆为协议适配器注册表，并有 per-adapter round-trip 测试（`protocol-adapters-registry.test.js`）+ `protocol-conversion-fixtures.test.js` 兜底。
+- 在继续拆 `node-parser.js` 前，先补典型协议 fixture。
 - 保护 URL → Clash → URL roundtrip 与 Clash YAML/Base64/raw line 解析。
 
 ### 优先级 5：前端测试稳定性
