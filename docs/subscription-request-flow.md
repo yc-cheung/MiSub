@@ -78,6 +78,8 @@ API 路径 `/api/*` 总是优先进入 `handleApiRequest(request, env)`，不会
 
 ## 5. profile 模式与全量 token 模式
 
+目标订阅集合的解析已抽取为独立函数 `resolveTarget({ token, profileIdentifier, config, allProfiles, allMisubs, storageAdapter })`，返回纯对象 `{ targetMisubs, subName, currentProfile, isProfileExpired }`；token/订阅组校验失败时返回 `{ errorResponse }`，由 handler 直接回传。
+
 ### 5.1 profile 模式
 
 当 `profileIdentifier` 存在时：
@@ -141,6 +143,8 @@ profile 模式下，如果访问日志开启且不是 `callback_token`/内部请
 - 否则按订阅组 `subconverter.engineMode`、全局 `subconverter.engineMode`、默认 `builtin`。
 
 ## 7. 模板、规则等级与请求参数覆盖
+
+> 引擎/模板/规则等级，以及前缀、节点变换、算子与 `include/exclude/rename/emoji` 等 URL 覆盖，已统一在 `resolveGenerationSettings({ url, userAgentHeader, config, currentProfile, subName })` 中一次性组装并返回纯对象（含 `generationSettings`）。此前这部分逻辑分散在 handler 顶部与刷新闭包两处，并重复查找了一次订阅组；现已复用已解析的 `currentProfile`，不再重复查找。
 
 模板来源：
 

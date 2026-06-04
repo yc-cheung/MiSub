@@ -200,8 +200,10 @@ functions/modules/subscription/main-handler.js
 ```text
 订阅请求
 └── handleMisubRequest(context)
-    ├── resolveRequestContext()       # 解析 URL、UA、target、profile、缓存参数等
+    ├── resolveRequestContext()       # 解析 token / profileIdentifier
     ├── 读取 settings / profiles / subscriptions
+    ├── resolveTarget()               # profile/token → { targetMisubs, subName, currentProfile, isProfileExpired }
+    ├── resolveGenerationSettings()   # 引擎/模板/规则等级 + 前缀/节点变换/算子/URL 覆盖（统一组装）
     ├── resolveNodeListWithCache()    # 根据配置读缓存或生成节点
     ├── generateCombinedNodeList()    # 拉取并合并节点
     ├── ProcessorService              # 节点后处理
