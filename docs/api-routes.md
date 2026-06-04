@@ -12,6 +12,7 @@
   - `securityHeadersMiddleware()`：统一添加安全响应头。
 - 管理 API 的主要认证方式：`authMiddleware()` 校验 HMAC 登录 Cookie。
 - `/cron` 不走 `/api/*` 的 Cookie 登录认证，使用 `settings.cronSecret`，支持 `Authorization: Bearer <secret>` 或 `?secret=<secret>`。
+- `/api/*` 分发由 `api-router.js` 的声明式路由表 `ROUTES`（`{ path/prefix, method?, auth, methods?/notAllowed?, errorWrap?, handler }`）驱动，取代了旧的 if 链 + switch。共享中间件统一处理：诊断门控（关闭时 404）、鉴权（`auth: 'required'` → 401）、方法校验（按路由 `methods` + 各自 `notAllowed` 返回，保留 `ok/success`、字符串 vs 对象的 405 等历史不一致）、迁移接口的错误包装。未匹配路径沿用原全局门控：未登录 401、已登录 404。
 
 ## 顶层非 `/api/*` 路由
 
