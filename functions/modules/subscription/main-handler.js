@@ -307,6 +307,232 @@ export function resolveBuiltinRequestOptions({ searchParams, userAgent = '' } = 
     };
 }
 
+// 订阅组到期时返回的占位节点（既用于 targetMisubs，也用于各输出分支）
+const DEFAULT_EXPIRED_NODE = `trojan://00000000-0000-0000-0000-000000000000@127.0.0.1:443#${encodeURIComponent('您的订阅已失效')}`;
+
+/**
+ * 解析请求目标：根据 profileToken/订阅组或管理员 token 确定要输出的订阅集合。
+ * 返回纯对象，不通过 context 传递数据；token/订阅组校验失败时返回 `errorResponse`。
+ *
+ * @returns {Promise<{ errorResponse: Response } | { targetMisubs: Array, subName: string, currentProfile: (Object|null), isProfileExpired: boolean }>}
+ */
+export async function resolveTarget({ token, profileIdentifier, config, allProfiles, allMisubs, storageAdapter }) {
+    let subName = config.FileName;
+    let isProfileExpired = false;
+    let currentProfile = null;
+    let targetMisubs;
+
+    if (profileIdentifier) {
+        if (!token || token !== config.profileToken) {
+            return { errorResponse: new Response('Invalid Profile Token', { status: 403 }) };
+        }
+        currentProfile = allProfiles.find(p => (p.customId && p.customId === profileIdentifier) || p.id === profileIdentifier);
+        const profile = currentProfile;
+        if (!profile || !profile.enabled) {
+            return { errorResponse: new Response('Profile not found or disabled', { status: 404 }) };
+        }
+
+        // Check if the profile has an expiration date and if it's expired
+        if (profile.expiresAt) {
+            const expiryDate = new Date(profile.expiresAt);
+            const now = new Date();
+            if (now > expiryDate) {
+                isProfileExpired = true;
+            }
+        }
+
+        if (isProfileExpired) {
+            subName = profile.name; // Still use profile name for filename
+            targetMisubs = [{ id: 'expired-node', url: DEFAULT_EXPIRED_NODE, name: '您的订阅已到期', isExpiredNode: true }]; // Set expired node as the only targetMisub
+        } else {
+            subName = profile.name;
+            targetMisubs = [];
+            const relatedIds = [
+                ...(Array.isArray(profile.subscriptions) ? profile.subscriptions.map(item => typeof item === 'object' ? item.id : item) : []),
+                ...(Array.isArray(profile.manualNodes) ? profile.manualNodes : [])
+            ].filter(Boolean);
+            const relatedSubs = typeof storageAdapter.getSubscriptionsByIds === 'function'
+                ? await storageAdapter.getSubscriptionsByIds(Array.from(new Set(relatedIds)))
+                : allMisubs;
+            const misubMap = new Map(relatedSubs.map(item => [item.id, item]));
+
+            // 1. Add subscriptions in order defined by profile
+            const profileSubIds = profile.subscriptions || [];
+            if (Array.isArray(profileSubIds)) {
+                profileSubIds.forEach(item => {
+                    // 支持两种格式：纯字符串 ID 或 带有覆盖配置的对象 { id, exclude, operators, ... }
+                    const isObject = item && typeof item === 'object';
+                    const id = isObject ? item.id : item;
+
+                    const baseSub = misubMap.get(id);
+                    if (baseSub && baseSub.enabled && typeof baseSub.url === 'string' && baseSub.url.startsWith('http')) {
+                        // 如果是对象，则合并覆盖配置（Profile 级别的设置优先级更高）
+                        const sub = isObject ? { ...baseSub, ...item } : baseSub;
+                        targetMisubs.push(sub);
+                    }
+                });
+            }
+
+            // 2. Add manual nodes in order defined by profile
+            const profileNodeIds = profile.manualNodes || [];
+            if (Array.isArray(profileNodeIds)) {
+                profileNodeIds.forEach(id => {
+                    const node = misubMap.get(id);
+                    if (node && node.enabled && typeof node.url === 'string' && !node.url.startsWith('http')) {
+                        targetMisubs.push(node);
+                    }
+                });
+            }
+        }
+
+        return { targetMisubs, subName, currentProfile, isProfileExpired };
+    }
+
+    if (!token || token !== config.mytoken) {
+        return { errorResponse: new Response('Invalid Token', { status: 403 }) };
+    }
+    targetMisubs = allMisubs.filter(s => s.enabled);
+    return { targetMisubs, subName, currentProfile, isProfileExpired };
+}
+
+/**
+ * 在一个位置组装全部生成相关设置（引擎/模板/规则等级 + 前缀/节点变换/算子/URL 覆盖），
+ * 取代以往“顶部算一半、刷新闭包里算另一半”的拆分，并复用已解析的 currentProfile（不再重复查找）。
+ *
+ * @returns {{ profileSub: Object, globalSub: Object, isExternalMode: boolean, useBuiltin: boolean,
+ *   shouldSkipCertificateVerify: boolean, shouldEnableUdp: boolean, templateSource: Object,
+ *   ruleLevel: string, generationSettings: Object }}
+ */
+export function resolveGenerationSettings({ url, userAgentHeader, config, currentProfile, subName }) {
+    const urlInclude = url.searchParams.get('include');
+    const urlExclude = url.searchParams.get('exclude');
+    const urlRename = url.searchParams.get('rename');
+    const urlEmoji = url.searchParams.get('emoji'); // true/false
+
+    // [Subconverter Engine Selection] Priority: URL Parameter > Profile Settings > Global Settings
+    const profileSub = currentProfile?.subconverter || {};
+    const globalSub = config.subconverter || {};
+
+    // [Optimization] Respect user defined engine mode while preventing loops for non-browser agents (backend fetchers)
+    const effectiveEngine = resolveEffectiveEngine({
+        searchParams: url.searchParams,
+        userAgent: userAgentHeader,
+        profileEngineMode: profileSub.engineMode,
+        globalEngineMode: globalSub.engineMode
+    });
+    const isExternalMode = effectiveEngine === 'external';
+    const useBuiltin = !isExternalMode;
+    const { shouldSkipCertificateVerify, shouldEnableUdp } = resolveBuiltinEngineFlags(config, isExternalMode);
+
+    const globalTemplateUrl = resolveTemplateUrl(config.transformConfigMode, config.transformConfig, '');
+    const templateUrl = currentProfile
+        ? resolveTemplateUrl(currentProfile.transformConfigMode, currentProfile.transformConfig, globalTemplateUrl)
+        : globalTemplateUrl;
+    const templateSource = resolveTemplateSource(templateUrl);
+
+    // [逻辑统一] 规则等级：URL 参数 > 订阅组设置 > 全局设置 > 默认值 (std)
+    // [重要变更] 如果使用了远程自定义配置 (templateSource.kind === 'remote')，则完全禁用内置等级 (强制为 none)
+    const resolvedProfileLevel = currentProfile?.ruleLevel || currentProfile?.clashRuleLevel || '';
+    const resolvedGlobalLevel = config.ruleLevel || config.clashRuleLevel || 'std';
+
+    let ruleLevel;
+    if (templateSource.kind === 'remote' || templateSource.kind === 'custom') {
+        ruleLevel = 'none';
+    } else {
+        ruleLevel = url.searchParams.get('level') || url.searchParams.get('ruleLevel') || resolvedProfileLevel || resolvedGlobalLevel;
+    }
+
+    // 设置优先级：订阅组设置 > 全局设置 > 内置默认值
+    // prefixSettings 回退逻辑
+    const globalPrefixSettings = config.defaultPrefixSettings || {};
+    const profilePrefixSettings = currentProfile?.prefixSettings || null;
+    const effectivePrefixSettings = { ...globalPrefixSettings };
+
+    if (profilePrefixSettings && typeof profilePrefixSettings === 'object') {
+        if (profilePrefixSettings.enableManualNodes !== null && profilePrefixSettings.enableManualNodes !== undefined) {
+            effectivePrefixSettings.enableManualNodes = profilePrefixSettings.enableManualNodes;
+        }
+        if (profilePrefixSettings.enableSubscriptions !== null && profilePrefixSettings.enableSubscriptions !== undefined) {
+            effectivePrefixSettings.enableSubscriptions = profilePrefixSettings.enableSubscriptions;
+        }
+        if (profilePrefixSettings.manualNodePrefix && profilePrefixSettings.manualNodePrefix.trim() !== '') {
+            effectivePrefixSettings.manualNodePrefix = profilePrefixSettings.manualNodePrefix;
+        }
+    }
+
+    // nodeTransform 回退逻辑
+    const globalNodeTransform = config.defaultNodeTransform || {};
+    const globalNodeTransformPresets = Array.isArray(config.nodeTransformPresets) ? config.nodeTransformPresets : [];
+    const profileNodeTransform = currentProfile?.nodeTransform ?? null;
+    const profileNodeTransformPresetId = currentProfile?.nodeTransformPresetId || '';
+    const profilePresetNodeTransform = profileNodeTransformPresetId
+        ? (globalNodeTransformPresets.find(item => item?.id === profileNodeTransformPresetId)?.config || null)
+        : null;
+    const hasProfileNodeTransform =
+        profileNodeTransform && Object.keys(profileNodeTransform).length > 0;
+
+    // nodeTransform 使用整体覆盖逻辑
+    const effectiveNodeTransform = hasProfileNodeTransform
+        ? profileNodeTransform
+        : profilePresetNodeTransform
+        || globalNodeTransform;
+
+    const generationSettings = {
+        ...effectivePrefixSettings,
+        nodeTransform: { ...effectiveNodeTransform },
+        name: subName,
+        operators: Array.isArray(currentProfile?.operators) ? [...currentProfile.operators] : [],
+        exclude: urlExclude || currentProfile?.exclude,
+        include: urlInclude || currentProfile?.include,
+        // [Issue #345] 透传 emoji 开关到内置生成器
+        addFlagEmoji: effectiveNodeTransform.addFlagEmoji
+    };
+
+    // [Subconverter API] 动态注入更名算子 (rename=old@new|A@B)
+    if (urlRename) {
+        const renameGroups = urlRename.split('|');
+        renameGroups.forEach(group => {
+            const [regex, replace] = group.split('@');
+            if (regex) {
+                generationSettings.operators.push({
+                    type: 'rename',
+                    enabled: true,
+                    params: {
+                        regex: {
+                            enabled: true,
+                            rules: [{
+                                pattern: regex,
+                                replacement: replace || '',
+                                flags: 'gi'
+                            }]
+                        }
+                    }
+                });
+            }
+        });
+    }
+
+    // [Subconverter API] 控制 Emoji 注入
+    if (urlEmoji === 'false') {
+        generationSettings.nodeTransform.addFlagEmoji = false;
+        generationSettings.nodeTransform.removeFlagEmoji = true;
+    } else if (urlEmoji === 'true') {
+        generationSettings.nodeTransform.addFlagEmoji = true;
+    }
+
+    return {
+        profileSub,
+        globalSub,
+        isExternalMode,
+        useBuiltin,
+        shouldSkipCertificateVerify,
+        shouldEnableUdp,
+        templateSource,
+        ruleLevel,
+        generationSettings
+    };
+}
+
 /**
  * 处理MiSub订阅请求
  * @param {Object} context - Cloudflare上下文
@@ -340,10 +566,7 @@ export async function handleMisubRequest(context) {
     context.accessLogPersistenceMode = config.accessLogPersistenceMode || 'light';
 
     // [Subconverter API] 提取 URL 控制参数，用于覆盖默认设置
-    const urlInclude = url.searchParams.get('include');
-    const urlExclude = url.searchParams.get('exclude');
-    const urlRename = url.searchParams.get('rename');
-    const urlEmoji = url.searchParams.get('emoji'); // true/false
+    // (include/exclude/rename/emoji 在 resolveGenerationSettings 内部解析)
     const urlUdp = url.searchParams.get('udp');     // true/false
     const urlTfo = url.searchParams.get('tfo');     // true/false
     const urlScv = url.searchParams.get('scv');     // true/false (skip-cert-verify)
@@ -368,100 +591,32 @@ export async function handleMisubRequest(context) {
     console.log(`[MiSub Parse] Token: ${maskSensitiveLogValue(token)}, Profile: ${maskSensitiveLogValue(profileIdentifier)}`);
     const shouldSkipLogging = shouldSkipAccessLog(userAgentHeader);
 
-    let targetMisubs;
-    let subName = config.FileName;
-    let isProfileExpired = false; // Moved declaration here
+    const targetResult = await resolveTarget({
+        token,
+        profileIdentifier,
+        config,
+        allProfiles,
+        allMisubs,
+        storageAdapter
+    });
+    if (targetResult.errorResponse) {
+        return targetResult.errorResponse;
+    }
+    const { targetMisubs, subName, currentProfile, isProfileExpired } = targetResult;
 
-    const DEFAULT_EXPIRED_NODE = `trojan://00000000-0000-0000-0000-000000000000@127.0.0.1:443#${encodeURIComponent('您的订阅已失效')}`;
-
-    let currentProfile = null;
-
-    if (profileIdentifier) {
-        // [修正] 使用 config 變量
-        if (!token || token !== config.profileToken) {
-            return new Response('Invalid Profile Token', { status: 403 });
+    // [新增] 增加订阅组下载计数（仅订阅组访问；非回调、非跳过日志、且开启访问日志时计数，避免重复计数）
+    if (currentProfile && !url.searchParams.has('callback_token') && !shouldSkipLogging && config.enableAccessLog) {
+        try {
+            const downloadCountKey = getProfileDownloadCountKey(currentProfile);
+            const currentCount = Number(await storageAdapter.get(downloadCountKey)) || 0;
+            context.waitUntil(
+                storageAdapter.put(downloadCountKey, currentCount + 1)
+                    .catch(err => console.error('[Download Count] Failed to update:', err))
+            );
+        } catch (err) {
+            // 计数失败不影响订阅服务
+            console.error('[Download Count] Error:', err);
         }
-        currentProfile = allProfiles.find(p => (p.customId && p.customId === profileIdentifier) || p.id === profileIdentifier);
-        const profile = currentProfile;
-        if (profile && profile.enabled) {
-            // Check if the profile has an expiration date and if it's expired
-            if (profile.expiresAt) {
-                const expiryDate = new Date(profile.expiresAt);
-                const now = new Date();
-                if (now > expiryDate) {
-                    isProfileExpired = true;
-                }
-            }
-
-            if (isProfileExpired) {
-                subName = profile.name; // Still use profile name for filename
-                targetMisubs = [{ id: 'expired-node', url: DEFAULT_EXPIRED_NODE, name: '您的订阅已到期', isExpiredNode: true }]; // Set expired node as the only targetMisub
-            } else {
-                subName = profile.name;
-                targetMisubs = [];
-                const relatedIds = [
-                    ...(Array.isArray(profile.subscriptions) ? profile.subscriptions.map(item => typeof item === 'object' ? item.id : item) : []),
-                    ...(Array.isArray(profile.manualNodes) ? profile.manualNodes : [])
-                ].filter(Boolean);
-                const relatedSubs = typeof storageAdapter.getSubscriptionsByIds === 'function'
-                    ? await storageAdapter.getSubscriptionsByIds(Array.from(new Set(relatedIds)))
-                    : allMisubs;
-                const misubMap = new Map(relatedSubs.map(item => [item.id, item]));
-
-                // 1. Add subscriptions in order defined by profile
-                const profileSubIds = profile.subscriptions || [];
-                if (Array.isArray(profileSubIds)) {
-                    profileSubIds.forEach(item => {
-                        // 支持两种格式：纯字符串 ID 或 带有覆盖配置的对象 { id, exclude, operators, ... }
-                        const isObject = item && typeof item === 'object';
-                        const id = isObject ? item.id : item;
-                        
-                        const baseSub = misubMap.get(id);
-                        if (baseSub && baseSub.enabled && typeof baseSub.url === 'string' && baseSub.url.startsWith('http')) {
-                            // 如果是对象，则合并覆盖配置（Profile 级别的设置优先级更高）
-                            const sub = isObject ? { ...baseSub, ...item } : baseSub;
-                            targetMisubs.push(sub);
-                        }
-                    });
-                }
-
-                // 2. Add manual nodes in order defined by profile
-                const profileNodeIds = profile.manualNodes || [];
-                if (Array.isArray(profileNodeIds)) {
-                    profileNodeIds.forEach(id => {
-                        const node = misubMap.get(id);
-                        if (node && node.enabled && typeof node.url === 'string' && !node.url.startsWith('http')) {
-                            targetMisubs.push(node);
-                        }
-                    });
-                }
-            }
-            // [新增] 增加订阅组下载计数
-            // 仅在非回调请求时及非内部请求时增加计数(避免重复计数)
-            // 且仅当开启访问日志时才计数
-            if (!url.searchParams.has('callback_token') && !shouldSkipLogging && config.enableAccessLog) {
-                try {
-                    const downloadCountKey = getProfileDownloadCountKey(profile);
-                    const currentCount = Number(await storageAdapter.get(downloadCountKey)) || 0;
-                    context.waitUntil(
-                        storageAdapter.put(downloadCountKey, currentCount + 1)
-                            .catch(err => console.error('[Download Count] Failed to update:', err))
-                    );
-
-                } catch (err) {
-                    // 计数失败不影响订阅服务
-                    console.error('[Download Count] Error:', err);
-                }
-            }
-        } else {
-            return new Response('Profile not found or disabled', { status: 404 });
-        }
-    } else {
-        // [修正] 使用 config 變量
-        if (!token || token !== config.mytoken) {
-            return new Response('Invalid Token', { status: 403 });
-        }
-        targetMisubs = allMisubs.filter(s => s.enabled);
     }
 
     // 使用统一的确定目标格式的方法（此方法中包含了处理各类客户端如 Surge 等对应版本的最新支持规则）
@@ -496,39 +651,18 @@ export async function handleMisubRequest(context) {
         }
     }
 
-    // [Subconverter Engine Selection] Priority: URL Parameter > Profile Settings > Global Settings
-    const profileSub = currentProfile?.subconverter || {};
-    const globalSub = config.subconverter || {};
-    
-    // [Optimization] Respect user defined engine mode while preventing loops for non-browser agents (backend fetchers)
-    const effectiveEngine = resolveEffectiveEngine({
-        searchParams: url.searchParams,
-        userAgent: userAgentHeader,
-        profileEngineMode: profileSub.engineMode,
-        globalEngineMode: globalSub.engineMode
-    });
-    const isExternalMode = effectiveEngine === 'external';
-    const useBuiltin = !isExternalMode;
-    const { shouldSkipCertificateVerify, shouldEnableUdp } = resolveBuiltinEngineFlags(config, isExternalMode);
-
-    
-    const globalTemplateUrl = resolveTemplateUrl(config.transformConfigMode, config.transformConfig, '');
-    const templateUrl = currentProfile
-        ? resolveTemplateUrl(currentProfile.transformConfigMode, currentProfile.transformConfig, globalTemplateUrl)
-        : globalTemplateUrl;
-    const templateSource = resolveTemplateSource(templateUrl);
-
-    // [逻辑统一] 规则等级：URL 参数 > 订阅组设置 > 全局设置 > 默认值 (std)
-    // [重要变更] 如果使用了远程自定义配置 (templateSource.kind === 'remote')，则完全禁用内置等级 (强制为 none)
-    const resolvedProfileLevel = currentProfile?.ruleLevel || currentProfile?.clashRuleLevel || '';
-    const resolvedGlobalLevel = config.ruleLevel || config.clashRuleLevel || 'std';
-    
-    let ruleLevel;
-    if (templateSource.kind === 'remote' || templateSource.kind === 'custom') {
-        ruleLevel = 'none';
-    } else {
-        ruleLevel = url.searchParams.get('level') || url.searchParams.get('ruleLevel') || resolvedProfileLevel || resolvedGlobalLevel;
-    }
+    // [统一] 一次性解析全部生成相关设置（引擎/模板/规则等级 + 前缀/节点变换/算子/URL 覆盖）
+    const {
+        profileSub,
+        globalSub,
+        isExternalMode,
+        useBuiltin,
+        shouldSkipCertificateVerify,
+        shouldEnableUdp,
+        templateSource,
+        ruleLevel,
+        generationSettings
+    } = resolveGenerationSettings({ url, userAgentHeader, config, currentProfile, subName });
 
     // === 缓存机制：快速响应客户端请求 ===
     const cacheKey = generateCacheKey(
@@ -562,86 +696,6 @@ export async function handleMisubRequest(context) {
             type: profileIdentifier ? 'profile' : 'token',
             domain
         };
-
-        const activeProfile = profileIdentifier ? allProfiles.find(p => (p.customId && p.customId === profileIdentifier) || p.id === profileIdentifier) : null;
-
-        // 设置优先级：订阅组设置 > 全局设置 > 内置默认值
-        // prefixSettings 回退逻辑
-        const globalPrefixSettings = config.defaultPrefixSettings || {};
-        const profilePrefixSettings = activeProfile?.prefixSettings || null;
-        const effectivePrefixSettings = { ...globalPrefixSettings };
-
-        if (profilePrefixSettings && typeof profilePrefixSettings === 'object') {
-            if (profilePrefixSettings.enableManualNodes !== null && profilePrefixSettings.enableManualNodes !== undefined) {
-                effectivePrefixSettings.enableManualNodes = profilePrefixSettings.enableManualNodes;
-            }
-            if (profilePrefixSettings.enableSubscriptions !== null && profilePrefixSettings.enableSubscriptions !== undefined) {
-                effectivePrefixSettings.enableSubscriptions = profilePrefixSettings.enableSubscriptions;
-            }
-            if (profilePrefixSettings.manualNodePrefix && profilePrefixSettings.manualNodePrefix.trim() !== '') {
-                effectivePrefixSettings.manualNodePrefix = profilePrefixSettings.manualNodePrefix;
-            }
-        }
-
-        // nodeTransform 回退逻辑
-        const globalNodeTransform = config.defaultNodeTransform || {};
-        const globalNodeTransformPresets = Array.isArray(config.nodeTransformPresets) ? config.nodeTransformPresets : [];
-        const profileNodeTransform = activeProfile?.nodeTransform ?? null;
-        const profileNodeTransformPresetId = activeProfile?.nodeTransformPresetId || '';
-        const profilePresetNodeTransform = profileNodeTransformPresetId
-            ? (globalNodeTransformPresets.find(item => item?.id === profileNodeTransformPresetId)?.config || null)
-            : null;
-        const hasProfileNodeTransform =
-            profileNodeTransform && Object.keys(profileNodeTransform).length > 0;
-
-        // nodeTransform 使用整体覆盖逻辑
-        const effectiveNodeTransform = hasProfileNodeTransform
-            ? profileNodeTransform
-            : profilePresetNodeTransform
-            || globalNodeTransform;
-
-        const generationSettings = {
-            ...effectivePrefixSettings,
-            nodeTransform: { ...effectiveNodeTransform },
-            name: subName,
-            operators: Array.isArray(activeProfile?.operators) ? [...activeProfile.operators] : [],
-            exclude: urlExclude || activeProfile?.exclude,
-            include: urlInclude || activeProfile?.include,
-            // [Issue #345] 透传 emoji 开关到内置生成器
-            addFlagEmoji: effectiveNodeTransform.addFlagEmoji
-        };
-
-        // [Subconverter API] 动态注入更名算子 (rename=old@new|A@B)
-        if (urlRename) {
-            const renameGroups = urlRename.split('|');
-            renameGroups.forEach(group => {
-                const [regex, replace] = group.split('@');
-                if (regex) {
-                    generationSettings.operators.push({
-                        type: 'rename',
-                        enabled: true,
-                        params: {
-                            regex: {
-                                enabled: true,
-                                rules: [{
-                                    pattern: regex,
-                                    replacement: replace || '',
-                                    flags: 'gi'
-                                }]
-                            }
-                        }
-                    });
-                }
-            });
-        }
-
-        // [Subconverter API] 控制 Emoji 注入
-        if (urlEmoji === 'false') {
-            generationSettings.nodeTransform.addFlagEmoji = false;
-            generationSettings.nodeTransform.removeFlagEmoji = true;
-        } else if (urlEmoji === 'true') {
-            generationSettings.nodeTransform.addFlagEmoji = true;
-        }
 
         const freshNodes = await generateCombinedNodeList(
             context, // 传入完整 context
