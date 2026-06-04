@@ -122,8 +122,13 @@ functions/modules/handlers/
 ├─ node-handler.js          # 节点统计、健康检查、批量更新
 ├─ debug-handler.js         # 调试与系统信息接口
 ├─ error-report-handler.js  # 前端错误上报
-├─ telegram-webhook-handler.js # Telegram Bot 推送回调
-└─ telegram-transport.js    # Telegram send/edit/answer 传输适配器
+├─ telegram-webhook-handler.js # Telegram Bot 入口：校验+权限+命令路由表（装配层）
+├─ telegram-transport.js    # Telegram send/edit/answer 传输适配器
+└─ telegram/               # Bot 拆分模块
+   ├─ shared.js            # 存储/配置/传输/权限/限流/用户节点共享工具
+   ├─ formatters.js        # 纯消息构建函数（快照测试）
+   ├─ commands.js          # 命令处理器（/start /list /enable ...）
+   └─ callbacks.js         # 按钮回调分发（元数据表）
 ```
 
 #### 2. 订阅处理 (`functions/modules/subscription/`)
