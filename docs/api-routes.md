@@ -267,15 +267,16 @@
 
 - `POST /api/cron/trigger`
   - Handler：api-router 内联 `handleCronTriggerRequest()`
-  - 行为：导入 `functions/_schedule.js` 执行同步。
-  - 写入：`cron_last_execution`；同步过程可能写订阅状态。
+  - 行为：导入 `functions/_schedule.js` 执行 Subscription Sync（刷新启用的 HTTP 订阅节点数量）。
+  - 数据访问：统一走 `StorageFactory`（规范绑定 + `KV_KEY_SUBS`），读取/持久化与应用一致。
+  - 写入：`cron_last_execution`；有节点数量变化时整块回写订阅列表。
 
 ## 当前值得关注的边界
 
 - `GET /api/clients*` 是公开只读接口，但当前可能在图标迁移时写回 KV；如果未来要严格区分只读公开接口，可单独收敛这个副作用。
 - `POST /api/public/guestbook` 与 `POST /api/system/error_report` 是公开写接口，已有限制与节流，但仍是滥用风险点，后续可补更明确的速率限制/验证码/Turnstile 方案。
 - `/api/auth_debug` 与 `/api/auth_check` 不要求登录，但默认关闭；部署时必须保持 `ENABLE_AUTH_DIAGNOSTICS` 关闭，除非正在排查登录问题。
-- `/api/cron/trigger` 当前复用 `functions/_schedule.js`，而 `docs/codebase-review.md` 已标记 `_cron.js` / `_schedule.js` 为疑似遗留定时实现；后续应继续确认并收敛 cron 主实现。
+- `/api/cron/trigger` 复用 `functions/_schedule.js` 执行 **Subscription Sync**；它与 `modules/notifications.js` 的 **Cron Notification**（Telegram 流量/到期提醒）是两个独立任务。`_cron.js` 与 `api-router.js` 内未被调用的重复 `performSubscriptionSync` 已删除。
 - `/api/system/export` 可导出脱敏数据；虽然需要登录，后续仍应通过测试固定脱敏字段覆盖。
 - 所有会主动拉取外部 URL 的接口应继续依赖 `validatePublicFetchUrl()` / `safeFetchPublicUrl()`，避免私网 SSRF 回归。
 

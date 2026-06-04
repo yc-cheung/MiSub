@@ -51,7 +51,7 @@
 ### 定时与通知
 
 - `functions/modules/notifications.js`：当前 `/cron` 与 `/api/cron/trigger` 使用的主定时检查逻辑。
-- `functions/_cron.js`、`functions/_schedule.js`：疑似遗留定时实现，使用旧绑定/旧 key，需要标记或收敛，避免误用。
+- `functions/_schedule.js`：`/api/cron/trigger` 调用的 **Subscription Sync**，已收敛为统一走 `StorageFactory`（规范绑定 + `KV_KEY_SUBS`）。`functions/_cron.js`（从未被引用）与 `api-router.js` 内未被调用的重复 `performSubscriptionSync` 已删除。
 
 ### 安全与公开接口
 
@@ -129,10 +129,10 @@
 - 不改业务代码。
 - 每次只处理 1~2 个测试文件，跑目标测试 + 全量测试 + build。
 
-### 优先级 2：标记 legacy cron
+### 优先级 2：收敛 legacy cron（已完成）
 
-- 在 `_cron.js` / `_schedule.js` 顶部加明确注释，说明当前主 cron 入口是 `modules/notifications.js`，这两个文件使用旧绑定/旧 key，禁止作为生产主链路依据。
-- 暂不删除文件，避免破坏部署兼容。
+- `functions/_cron.js`（从未被引用）与 `api-router.js` 内未被调用的重复 `performSubscriptionSync` 已删除。
+- `functions/_schedule.js`（`/api/cron/trigger` 调用的 Subscription Sync）已收敛为统一走 `StorageFactory`（规范绑定 + `KV_KEY_SUBS`），不再使用旧绑定/旧 key；与 `modules/notifications.js` 的 Cron Notification 保持为两个独立任务。
 
 ### 优先级 3：显式化 API 路由权限清单
 
@@ -158,6 +158,5 @@
 ## 不建议立即做的事
 
 - 不直接拆 `telegram-webhook-handler.js` 或 `main-handler.js` 的大块业务逻辑。
-- 不直接删除 `_cron.js` / `_schedule.js`。
 - 不在没有 fixture 的情况下重写协议转换器。
 - 不把 coverage 纳入 CI，除非先补齐 `@vitest/coverage-v8` 并跑通。
