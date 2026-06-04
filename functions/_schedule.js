@@ -13,7 +13,7 @@
  */
 
 import { StorageFactory } from './storage-adapter.js';
-import { KV_KEY_SUBS, SYSTEM_CONSTANTS } from './modules/config.js';
+import { SYSTEM_CONSTANTS } from './modules/config.js';
 
 // 与 notifications.js 中保持一致的节点协议匹配规则
 const NODE_REGEX = /^(ss|ssr|vmess|vless|trojan|hysteria2?|hy|hy2|tuic|anytls|socks5|socks):\/\//gm;
@@ -23,24 +23,14 @@ async function getStorageAdapter(env) {
     return StorageFactory.createAdapter(env, storageType);
 }
 
-// 通过存储适配器读取订阅：优先使用行级接口（D1），否则回退到整块 JSON（KV）。
+// 通过存储适配器读取/写入订阅（适配器统一实现行级接口，KV 内部整块读写）。
 async function loadSubscriptions(storageAdapter) {
-    if (typeof storageAdapter.getAllSubscriptions === 'function') {
-        const subscriptions = await storageAdapter.getAllSubscriptions();
-        if (Array.isArray(subscriptions)) {
-            return subscriptions;
-        }
-    }
-    const subscriptions = await storageAdapter.get(KV_KEY_SUBS);
+    const subscriptions = await storageAdapter.getAllSubscriptions();
     return Array.isArray(subscriptions) ? subscriptions : [];
 }
 
 async function persistSubscriptions(storageAdapter, subscriptions) {
-    if (typeof storageAdapter.putAllSubscriptions === 'function') {
-        await storageAdapter.putAllSubscriptions(subscriptions);
-        return;
-    }
-    await storageAdapter.put(KV_KEY_SUBS, subscriptions);
+    await storageAdapter.putAllSubscriptions(subscriptions);
 }
 
 export async function onRequest(context) {

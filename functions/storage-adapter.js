@@ -34,6 +34,7 @@ const D1_SCHEMA_STATEMENTS = [
     `CREATE TABLE IF NOT EXISTS settings (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL,
+        expires_at INTEGER,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );`,
@@ -42,10 +43,80 @@ const D1_SCHEMA_STATEMENTS = [
     `CREATE INDEX IF NOT EXISTS idx_settings_updated_at ON settings(updated_at);`
 ];
 
+// 旧库的 settings 表可能没有 expires_at 列；ADD COLUMN 在已存在时会报错，忽略之即可。
+const D1_MIGRATION_STATEMENTS = [
+    `ALTER TABLE settings ADD COLUMN expires_at INTEGER;`
+];
+
 async function ensureD1Schema(d1Db) {
     for (const statement of D1_SCHEMA_STATEMENTS) {
         await d1Db.prepare(statement).run();
     }
+    for (const statement of D1_MIGRATION_STATEMENTS) {
+        try {
+            await d1Db.prepare(statement).run();
+        } catch (error) {
+            // duplicate column name —— 已迁移过，忽略
+            if (!String(error?.message || '').toLowerCase().includes('duplicate column')) {
+                console.warn('[D1] migration statement failed (continuing):', error?.message || error);
+            }
+        }
+    }
+}
+
+/**
+ * 判断 diff 是否为简单的 { added, updated, removed } 数组结构。
+ * 用于决定 D1 行级持久化能否直接套用增量补丁。
+ */
+function isSimpleArrayDiff(diff) {
+    if (!diff || typeof diff !== 'object') return false;
+    const allowedKeys = ['added', 'updated', 'removed'];
+    if (!Object.keys(diff).every(key => allowedKeys.includes(key))) return false;
+    return allowedKeys.every(key => Array.isArray(diff[key] || []));
+}
+
+// 集合种类（subscriptions / profiles）到适配器方法/数据键的映射，供 persistCollection 复用。
+const COLLECTION_CONFIG = {
+    subscriptions: { key: DATA_KEYS.SUBSCRIPTIONS, getAll: 'getAllSubscriptions', putOne: 'putSubscription', deleteOne: 'deleteSubscriptionById' },
+    profiles: { key: DATA_KEYS.PROFILES, getAll: 'getAllProfiles', putOne: 'putProfile', deleteOne: 'deleteProfileById' }
+};
+
+/**
+ * 行级持久化（D1 / 内存适配器复用）：有简单增量补丁则套用补丁，否则按 current vs final 计算增量。
+ * KV 不走这里，而是整块覆盖以保证原子性（见 ADR-0001）。
+ */
+async function rowLevelPersist(adapter, kind, finalItems, diff) {
+    const cfg = COLLECTION_CONFIG[kind];
+    if (!cfg || !Array.isArray(finalItems)) return false;
+
+    if (isSimpleArrayDiff(diff)) {
+        const { added = [], updated = [], removed = [] } = diff;
+        await Promise.all([
+            ...added.map(item => adapter[cfg.putOne](item)),
+            ...updated.map(item => adapter[cfg.putOne](item)),
+            ...removed.map(id => adapter[cfg.deleteOne](id))
+        ]);
+        return true;
+    }
+
+    const currentItems = await adapter[cfg.getAll]();
+    const finalMap = new Map(finalItems.map(item => [item.id, item]));
+    const currentMap = new Map(currentItems.map(item => [item.id, item]));
+
+    const ops = [];
+    for (const item of finalItems) {
+        const existing = currentMap.get(item.id);
+        if (!existing || JSON.stringify(existing) !== JSON.stringify(item)) {
+            ops.push(adapter[cfg.putOne](item));
+        }
+    }
+    for (const existing of currentItems) {
+        if (!finalMap.has(existing.id)) {
+            ops.push(adapter[cfg.deleteOne](existing.id));
+        }
+    }
+    await Promise.all(ops);
+    return true;
 }
 
 /**
@@ -54,7 +125,6 @@ async function ensureD1Schema(d1Db) {
 class KVStorageAdapter {
     constructor(kvNamespace) {
         this.kv = kvNamespace;
-        this.type = STORAGE_TYPES.KV;
     }
 
     async get(key) {
@@ -79,6 +149,19 @@ class KVStorageAdapter {
             return true;
         } catch (error) {
             console.error(`[KV] Failed to put key ${key}:`, error);
+            throw error;
+        }
+    }
+
+    // 带过期的写入：KV 原生支持 expirationTtl（秒）
+    async putWithTTL(key, value, ttlSeconds) {
+        try {
+            const data = typeof value === 'string' ? value : JSON.stringify(value);
+            const options = ttlSeconds > 0 ? { expirationTtl: ttlSeconds } : undefined;
+            await this.kv.put(key, data, options);
+            return true;
+        } catch (error) {
+            console.error(`[KV] Failed to put key ${key} with TTL:`, error);
             throw error;
         }
     }
@@ -184,6 +267,14 @@ class KVStorageAdapter {
     async putAllProfiles(items) {
         return this.put(DATA_KEYS.PROFILES, items);
     }
+
+    // KV 行级操作是"整块重写"的假象，因此集合持久化用单次整块覆盖以保证原子性（见 ADR-0001）。
+    async persistCollection(kind, finalItems, _diff) {
+        const cfg = COLLECTION_CONFIG[kind];
+        if (!cfg || !Array.isArray(finalItems)) return false;
+        await this.put(cfg.key, finalItems);
+        return true;
+    }
 }
 
 /**
@@ -192,7 +283,6 @@ class KVStorageAdapter {
 class D1StorageAdapter {
     constructor(d1Database) {
         this.db = d1Database;
-        this.type = STORAGE_TYPES.D1;
     }
 
     async get(key, type = 'json') {
@@ -200,8 +290,15 @@ class D1StorageAdapter {
             // 根据 key 确定查询的表和字段
             const { table, queryField, queryValue } = this._parseKey(key);
 
+            if (table === 'settings') {
+                // settings 表支持 TTL：读取时顺带做过期懒清理（见 ADR-0001）
+                const row = await this._readSettingsRow(queryValue);
+                if (!row) return null;
+                return type === 'json' ? JSON.parse(row.data) : row.data;
+            }
+
             const result = await this.db.prepare(
-                `SELECT ${table === 'settings' ? 'value as data' : 'data'} FROM ${table} WHERE ${queryField} = ?`
+                `SELECT data FROM ${table} WHERE ${queryField} = ?`
             ).bind(queryValue).first();
 
             if (!result) return null;
@@ -215,6 +312,29 @@ class D1StorageAdapter {
             console.error(`[D1] Failed to get key ${key}:`, error);
             return null;
         }
+    }
+
+    // 读取 settings 行并处理过期：兼容旧库无 expires_at 列的情况。
+    async _readSettingsRow(key) {
+        let row;
+        try {
+            row = await this.db.prepare('SELECT value as data, expires_at FROM settings WHERE key = ?').bind(key).first();
+        } catch (error) {
+            if (String(error?.message || '').toLowerCase().includes('no such column')) {
+                row = await this.db.prepare('SELECT value as data FROM settings WHERE key = ?').bind(key).first();
+            } else {
+                throw error;
+            }
+        }
+        if (!row) return null;
+        if (row.expires_at != null && Number(row.expires_at) <= Date.now()) {
+            // 懒清理：过期即删除并视为不存在
+            try {
+                await this.db.prepare('DELETE FROM settings WHERE key = ?').bind(key).run();
+            } catch { /* cleanup 失败不影响读取结果 */ }
+            return null;
+        }
+        return row;
     }
 
     async put(key, value) {
@@ -239,6 +359,30 @@ class D1StorageAdapter {
             return true;
         } catch (error) {
             console.error(`[D1] Failed to put key ${key}:`, error);
+            throw error;
+        }
+    }
+
+    // 带过期的写入：仅 settings 表有 expires_at 列；其他表退化为普通写入。
+    async putWithTTL(key, value, ttlSeconds) {
+        const { table, queryValue } = this._parseKey(key);
+        if (table !== 'settings') {
+            return this.put(key, value);
+        }
+        const data = typeof value === 'string' ? value : JSON.stringify(value);
+        const expiresAt = ttlSeconds > 0 ? Date.now() + ttlSeconds * 1000 : null;
+        try {
+            await this.db.prepare(`
+                INSERT OR REPLACE INTO settings (key, value, expires_at, updated_at)
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            `).bind(queryValue, data, expiresAt).run();
+            return true;
+        } catch (error) {
+            if (String(error?.message || '').toLowerCase().includes('no such column')) {
+                // 旧库无 expires_at 列：退化为不带过期的写入
+                return this.put(key, value);
+            }
+            console.error(`[D1] Failed to put key ${key} with TTL:`, error);
             throw error;
         }
     }
@@ -467,6 +611,11 @@ class D1StorageAdapter {
         return true;
     }
 
+    // D1 支持真正的行级写入：有增量补丁则套用，否则按 current vs final 计算增量。
+    async persistCollection(kind, finalItems, diff) {
+        return rowLevelPersist(this, kind, finalItems, diff);
+    }
+
     /**
      * 解析 key，确定对应的表、查询字段和查询值
      */
@@ -482,6 +631,9 @@ class D1StorageAdapter {
                 return { table: 'settings', queryField: 'key', queryValue: key };
             }
             if (String(key).startsWith('misub_guestbook_v1')) {
+                return { table: 'settings', queryField: 'key', queryValue: key };
+            }
+            if (String(key) === 'cron_last_execution') {
                 return { table: 'settings', queryField: 'key', queryValue: key };
             }
             // 处理其他格式的 key，默认作为 settings 表的 key，但记录警告
@@ -507,15 +659,159 @@ class D1StorageAdapter {
 }
 
 /**
- * 无存储降级适配器（无可用持久化存储时，不读写持久数据）
+ * 无存储降级适配器（无可用持久化存储时，不读写持久数据）。
+ * 实现完整接口，让调用方无需探测方法是否存在。
  */
 class NoopStorageAdapter {
     async get() { return null; }
     async put() { return true; }
+    async putWithTTL() { return true; }
     async delete() { return true; }
     async list() { return []; }
+    async getSubscriptionById() { return null; }
     async getAllSubscriptions() { return []; }
+    async getProfileById() { return null; }
     async getAllProfiles() { return []; }
+    async updateSubscriptionById() { return null; }
+    async putSubscription(item) { return item; }
+    async deleteSubscriptionById() { return false; }
+    async putProfile(item) { return item; }
+    async deleteProfileById() { return false; }
+    async getSubscriptionsByIds() { return []; }
+    async putAllSubscriptions() { return true; }
+    async putAllProfiles() { return true; }
+    async persistCollection() { return true; }
+}
+
+/**
+ * 内存存储适配器：实现完整接口（含真实 TTL 过期），用于测试，让调用方可被单测覆盖。
+ * 语义对齐 KV（整块 blob 模型）：getAll/putAll 直接读写 DATA_KEYS 下的数组。
+ */
+export class InMemoryStorageAdapter {
+    constructor(initial = {}) {
+        this.store = new Map();
+        this.expiry = new Map();
+        if (initial.subscriptions) this.store.set(DATA_KEYS.SUBSCRIPTIONS, initial.subscriptions);
+        if (initial.profiles) this.store.set(DATA_KEYS.PROFILES, initial.profiles);
+        if (initial.settings) this.store.set(DATA_KEYS.SETTINGS, initial.settings);
+    }
+
+    _expired(key) {
+        const exp = this.expiry.get(key);
+        if (exp != null && exp <= Date.now()) {
+            this.store.delete(key);
+            this.expiry.delete(key);
+            return true;
+        }
+        return false;
+    }
+
+    async get(key) {
+        if (this._expired(key)) return null;
+        return this.store.has(key) ? this.store.get(key) : null;
+    }
+
+    async put(key, value) {
+        this.store.set(key, value);
+        this.expiry.delete(key);
+        return true;
+    }
+
+    async putWithTTL(key, value, ttlSeconds) {
+        this.store.set(key, value);
+        if (ttlSeconds > 0) this.expiry.set(key, Date.now() + ttlSeconds * 1000);
+        else this.expiry.delete(key);
+        return true;
+    }
+
+    async delete(key) {
+        this.store.delete(key);
+        this.expiry.delete(key);
+        return true;
+    }
+
+    async list(prefix = '') {
+        return Array.from(this.store.keys())
+            .filter(key => key.startsWith(prefix))
+            .map(name => ({ name }));
+    }
+
+    async getAllSubscriptions() {
+        const all = this.store.get(DATA_KEYS.SUBSCRIPTIONS);
+        return Array.isArray(all) ? all : [];
+    }
+
+    async getAllProfiles() {
+        const all = this.store.get(DATA_KEYS.PROFILES);
+        return Array.isArray(all) ? all : [];
+    }
+
+    async getSubscriptionById(id) {
+        return (await this.getAllSubscriptions()).find(item => item.id === id) || null;
+    }
+
+    async getProfileById(id) {
+        return (await this.getAllProfiles()).find(item => item.id === id || item.customId === id) || null;
+    }
+
+    async getSubscriptionsByIds(ids = []) {
+        const idSet = new Set(ids);
+        return (await this.getAllSubscriptions()).filter(item => idSet.has(item.id));
+    }
+
+    async updateSubscriptionById(id, updater) {
+        const all = await this.getAllSubscriptions();
+        const index = all.findIndex(item => item.id === id);
+        if (index === -1) return null;
+        all[index] = updater({ ...all[index] });
+        await this.put(DATA_KEYS.SUBSCRIPTIONS, all);
+        return all[index];
+    }
+
+    async putSubscription(item) {
+        const all = await this.getAllSubscriptions();
+        const index = all.findIndex(entry => entry.id === item.id);
+        if (index === -1) all.push(item); else all[index] = item;
+        await this.put(DATA_KEYS.SUBSCRIPTIONS, all);
+        return item;
+    }
+
+    async deleteSubscriptionById(id) {
+        const all = await this.getAllSubscriptions();
+        const filtered = all.filter(item => item.id !== id);
+        await this.put(DATA_KEYS.SUBSCRIPTIONS, filtered);
+        return filtered.length !== all.length;
+    }
+
+    async putProfile(item) {
+        const all = await this.getAllProfiles();
+        const index = all.findIndex(entry => entry.id === item.id);
+        if (index === -1) all.push(item); else all[index] = item;
+        await this.put(DATA_KEYS.PROFILES, all);
+        return item;
+    }
+
+    async deleteProfileById(id) {
+        const all = await this.getAllProfiles();
+        const filtered = all.filter(item => item.id !== id);
+        await this.put(DATA_KEYS.PROFILES, filtered);
+        return filtered.length !== all.length;
+    }
+
+    async putAllSubscriptions(items) {
+        return this.put(DATA_KEYS.SUBSCRIPTIONS, items);
+    }
+
+    async putAllProfiles(items) {
+        return this.put(DATA_KEYS.PROFILES, items);
+    }
+
+    async persistCollection(kind, finalItems, _diff) {
+        const cfg = COLLECTION_CONFIG[kind];
+        if (!cfg || !Array.isArray(finalItems)) return false;
+        await this.put(cfg.key, finalItems);
+        return true;
+    }
 }
 
 

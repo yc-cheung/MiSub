@@ -9,6 +9,39 @@ const putProfile = vi.fn();
 const deleteSubscriptionById = vi.fn();
 const deleteProfileById = vi.fn();
 const createAdapter = vi.fn();
+
+// 行级持久化（镜像真实适配器 persistCollection 的 D1 路径），让既有断言（putSubscription/deleteById 调用）仍成立
+const persistCollection = vi.fn(async (kind, finalItems, diff) => {
+  const isProfile = kind === 'profiles';
+  const putItem = isProfile ? putProfile : putSubscription;
+  const deleteItem = isProfile ? deleteProfileById : deleteSubscriptionById;
+  const getAll = isProfile ? getAllProfiles : getAllSubscriptions;
+  const isSimple = diff && typeof diff === 'object'
+    && Object.keys(diff).every(k => ['added', 'updated', 'removed'].includes(k))
+    && ['added', 'updated', 'removed'].every(k => Array.isArray(diff[k] || []));
+  if (isSimple) {
+    const { added = [], updated = [], removed = [] } = diff;
+    await Promise.all([
+      ...added.map(item => putItem(item)),
+      ...updated.map(item => putItem(item)),
+      ...removed.map(id => deleteItem(id))
+    ]);
+    return true;
+  }
+  const current = await getAll();
+  const finalMap = new Map(finalItems.map(i => [i.id, i]));
+  const curMap = new Map(current.map(i => [i.id, i]));
+  const ops = [];
+  for (const item of finalItems) {
+    const ex = curMap.get(item.id);
+    if (!ex || JSON.stringify(ex) !== JSON.stringify(item)) ops.push(putItem(item));
+  }
+  for (const ex of current) {
+    if (!finalMap.has(ex.id)) ops.push(deleteItem(ex.id));
+  }
+  await Promise.all(ops);
+  return true;
+});
 const getStorageType = vi.fn();
 const settingsCacheGet = vi.fn();
 const clearAllNodeCaches = vi.fn();
@@ -77,6 +110,7 @@ describe('api-handler storage helper usage', () => {
     getStorageType.mockResolvedValue('d1');
     settingsCacheGet.mockResolvedValue({});
     clearAllNodeCaches.mockResolvedValue({ cleared: 0, failed: 0, skipped: 0 });
+    persistCollection.mockClear();
     createAdapter.mockReturnValue({
       getAllSubscriptions,
       getAllProfiles,
@@ -85,7 +119,8 @@ describe('api-handler storage helper usage', () => {
       putSubscription,
       putProfile,
       deleteSubscriptionById,
-      deleteProfileById
+      deleteProfileById,
+      persistCollection
     });
     get.mockResolvedValue(null);
     putSubscription.mockResolvedValue(true);

@@ -722,16 +722,11 @@ async function handleCronStatusRequest(env) {
         const syncTimeout = parseInt(env.CRON_SYNC_TIMEOUT) || 30000;
         const enableParallel = env.CRON_ENABLE_PARALLEL !== 'false';
 
-        // 获取最近的Cron执行状态（如果有的话）
+        // 获取最近的Cron执行状态（如果有的话）——经适配器读取，D1-only 部署同样可用
         let lastExecution = null;
         try {
-            const kv = StorageFactory.resolveKV(env);
-            if (kv) {
-                const statusData = await kv.get('cron_last_execution');
-                if (statusData) {
-                    lastExecution = JSON.parse(statusData);
-                }
-            }
+            const storageAdapter = StorageFactory.createAdapter(env, await StorageFactory.getStorageType(env));
+            lastExecution = await storageAdapter.get('cron_last_execution');
         } catch (error) {
             console.warn('[Cron Status] Failed to fetch last execution:', error);
         }
@@ -791,24 +786,20 @@ async function handleCronTriggerRequest(env) {
             enableParallel
         });
 
-        // 保存执行状态
+        // 保存执行状态——经适配器带 TTL 写入，D1-only 部署同样可用（KV 原生 TTL；D1 expires_at + 懒清理）
         try {
-            const kv = StorageFactory.resolveKV(env);
-            if (kv) {
-                const executionStatus = {
-                    type: 'manual_trigger',
-                    cronType,
-                    timestamp: new Date().toISOString(),
-                    result: {
-                        totalSubscriptions: result.totalSubscriptions,
-                        successfulSyncs: result.successfulSyncs,
-                        failedSyncs: result.failedSyncs
-                    }
-                };
-                await kv.put('cron_last_execution', JSON.stringify(executionStatus), {
-                    expirationTtl: 86400 // 24小时后过期
-                });
-            }
+            const storageAdapter = StorageFactory.createAdapter(env, await StorageFactory.getStorageType(env));
+            const executionStatus = {
+                type: 'manual_trigger',
+                cronType,
+                timestamp: new Date().toISOString(),
+                result: {
+                    totalSubscriptions: result.totalSubscriptions,
+                    successfulSyncs: result.successfulSyncs,
+                    failedSyncs: result.failedSyncs
+                }
+            };
+            await storageAdapter.putWithTTL('cron_last_execution', executionStatus, 86400);
         } catch (error) {
             console.warn('[Cron Trigger] Failed to save execution status:', error);
         }

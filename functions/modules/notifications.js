@@ -5,7 +5,7 @@
  */
 
 import { formatBytes } from './utils.js';
-import { KV_KEY_SUBS, KV_KEY_SETTINGS, DEFAULT_SETTINGS, SYSTEM_CONSTANTS } from './config.js';
+import { KV_KEY_SETTINGS, DEFAULT_SETTINGS, SYSTEM_CONSTANTS } from './config.js';
 // 导入核心通知服务及工具
 import { 
     sendTgNotification as sendCoreTg, 
@@ -36,24 +36,12 @@ export async function sendEnhancedTgNotification(settings, type, clientIp, addit
 }
 
 async function loadSubscriptionsForCron(storageAdapter) {
-    if (typeof storageAdapter.getAllSubscriptions === 'function') {
-        const subscriptions = await storageAdapter.getAllSubscriptions();
-        if (Array.isArray(subscriptions)) {
-            return subscriptions;
-        }
-    }
-
-    const subscriptions = await storageAdapter.get(KV_KEY_SUBS);
+    const subscriptions = await storageAdapter.getAllSubscriptions();
     return Array.isArray(subscriptions) ? subscriptions : [];
 }
 
 async function persistSubscriptionsForCron(storageAdapter, subscriptions) {
-    if (typeof storageAdapter.putAllSubscriptions === 'function') {
-        await storageAdapter.putAllSubscriptions(subscriptions);
-        return;
-    }
-
-    await storageAdapter.put(KV_KEY_SUBS, subscriptions);
+    await storageAdapter.putAllSubscriptions(subscriptions);
 }
 
 /**

@@ -30,7 +30,7 @@
 
 ### 存储层
 
-- `functions/storage-adapter.js`：KV / D1 / Noop adapter、SettingsCache、DataMigrator。
+- `functions/storage-adapter.js`：KV / D1 / Noop / InMemory adapter、SettingsCache、DataMigrator。已实现完整封装（ADR-0001）：无 `.type` 公开面，集合保存走 `persistCollection`，TTL 走 `putWithTTL`（KV 原生 / D1 `expires_at` 懒清理）。
 - 当前数据形态兼容 KV 全量数组、D1 行级 JSON，以及旧 D1 `main` 行。
 - 风险：兼容逻辑复杂，旧结构与 row-level 结构并存时需要诊断能力支撑。
 
