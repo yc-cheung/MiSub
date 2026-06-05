@@ -91,3 +91,33 @@ describe('handleSystemInfoRequest', () => {
     });
   });
 });
+
+describe('handleExportDataRequest', () => {
+  beforeEach(() => {
+    get.mockReset();
+    createAdapter.mockReset();
+    getStorageType.mockReset();
+    getStorageType.mockResolvedValue('kv');
+    createAdapter.mockReturnValue({ get });
+  });
+
+  it('exports settings read from the canonical settings key (worker_settings_v1)', async () => {
+    const { handleExportDataRequest } = await import('../../functions/modules/handlers/debug-handler.js');
+
+    // settings 只在正确的规范 key 下存在；旧的错误 key 应取不到数据。
+    get.mockImplementation(async (key) =>
+      key === 'worker_settings_v1' ? { someFlag: true, mytoken: 'abc' } : []
+    );
+
+    const request = {
+      method: 'POST',
+      json: async () => ({ includeSubscriptions: false, includeProfiles: false, includeSettings: true })
+    };
+    const response = await handleExportDataRequest(request, {});
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.exportData.data.settings.someFlag).toBe(true);
+    expect(payload.metadata.settingsCount).toBeGreaterThan(0);
+  });
+});

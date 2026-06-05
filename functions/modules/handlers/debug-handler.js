@@ -4,6 +4,7 @@
  */
 
 import { StorageFactory } from '../../storage-adapter.js';
+import { KV_KEY_SETTINGS } from '../config.js';
 import { createJsonResponse, createErrorResponse } from '../utils.js';
 import { handleSubscriptionNodesRequest } from '../subscription-handler.js';
 import { debugTgNotification } from '../../services/notification-service.js';
@@ -274,7 +275,7 @@ export async function handleExportDataRequest(request, env) {
         }
 
         if (includeSettings) {
-            const settings = await storageAdapter.get('misub_settings_v1') || {};
+            const settings = await storageAdapter.get(KV_KEY_SETTINGS) || {};
             exportData.data.settings = redactSensitiveObject(settings);
         }
 
@@ -378,7 +379,8 @@ export async function handlePreviewContentRequest(request, env) {
             success: true,
             contentInfo,
             previewContent,
-            fullContent: request.fullExport ? decodedContent : null
+            // fullContent 历史上恒为 null（request.fullExport 从未被设置），保持响应结构不变。
+            fullContent: null
         });
     } catch (e) {
         return createErrorResponse(`内容预览失败: ${e.message}`, e.status || 500);

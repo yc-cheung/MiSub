@@ -4,6 +4,7 @@ import { useToastStore } from './toast';
 import { useSettingsStore } from './settings';
 import { useEditorStore } from './editor';
 import { createStorageCache } from '../utils/cache-helper.js';
+import { generateNodeId } from '../utils/id.js';
 import { DEFAULT_SETTINGS } from '../constants/default-settings.js';
 import { TIMING } from '../constants/timing.js';
 import { api } from '../lib/http.js';
@@ -244,6 +245,17 @@ export const useDataStore = defineStore('data', () => {
         markDirty();
     }
 
+    // 批量插入手动节点（如节点预览“保存选择”）。缺 id 的节点补 id；
+    // 反向插入使最终顺序与传入顺序一致（addSubscription 使用 unshift）。
+    function addNodes(nodes) {
+        if (!Array.isArray(nodes)) return;
+        for (let i = nodes.length - 1; i >= 0; i--) {
+            const node = { ...nodes[i] };
+            if (!node.id) node.id = generateNodeId();
+            addSubscription(node);
+        }
+    }
+
     function overwriteSubscriptions(items) {
         subscriptions.value = items;
     }
@@ -416,6 +428,7 @@ export const useDataStore = defineStore('data', () => {
 
         // Helpers
         addSubscription,
+        addNodes,
         overwriteSubscriptions,
         removeSubscription,
         updateSubscription,

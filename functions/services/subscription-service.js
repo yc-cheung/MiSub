@@ -715,15 +715,31 @@ function applyManualNodeName(nodeUrl, customName) {
  * @returns {Array} - 过滤后的节点列表
  */
 function applyFilterRules(validNodes, sub) {
+    let nodes = validNodes;
+
+    // include 白名单（正则）：仅保留名称/协议/地区命中的节点。
+    // 与 ?include= / profile.include 对应；先白名单再按 exclude 黑名单。
+    const includeText = sub.include;
+    if (includeText && includeText.trim() !== '') {
+        const includeLines = includeText
+            .split('\n')
+            .map(r => r.trim())
+            .filter(Boolean);
+        const includeRules = buildRuleSet(includeLines, false);
+        if (includeRules.hasRules) {
+            nodes = filterNodes(nodes, includeRules, 'include');
+        }
+    }
+
     const ruleText = sub.exclude;
-    if (!ruleText || ruleText.trim() === '') return validNodes;
+    if (!ruleText || ruleText.trim() === '') return nodes;
 
     const lines = ruleText
         .split('\n')
         .map(r => r.trim())
         .filter(Boolean);
 
-    if (lines.length === 0) return validNodes;
+    if (lines.length === 0) return nodes;
 
     // 规则分割：--- 为分隔，keep: 为白名单
     const dividerIndex = lines.findIndex(line => line === '---');
@@ -744,8 +760,8 @@ function applyFilterRules(validNodes, sub) {
     const shouldApplyWhitelist = (hasDivider && keepRules.hasRules) || whitelistOnly;
 
     const afterExclude = whitelistOnly
-        ? [...validNodes]
-        : filterNodes(validNodes, excludeRules, 'exclude');
+        ? [...nodes]
+        : filterNodes(nodes, excludeRules, 'exclude');
 
     return shouldApplyWhitelist
         ? filterNodes(afterExclude, keepRules, 'include')

@@ -342,7 +342,7 @@ describe('security hardening', () => {
   it('redacts sensitive fields from exported settings and subscriptions', async () => {
     const env = {
       MISUB_KV: createKv({
-        misub_settings_v1: JSON.stringify({
+        worker_settings_v1: JSON.stringify({
           mytoken: 'export-token-secret',
           cronSecret: 'cron-secret-value',
           BotToken: 'telegram-bot-token',
