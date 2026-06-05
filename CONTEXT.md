@@ -11,6 +11,9 @@ A named grouping of Subscriptions and Manual Nodes that produces one shareable s
 ## Manual Node
 A single proxy node entered directly by the user (not fetched from a Subscription).
 
+## Node URL (canonical form)
+The single internal representation every node is normalized to, regardless of the source format it arrived in (Clash YAML proxy, base64 line, plain URI). Dedup, the **Operator Chain**, and output generation all operate on this form. A deliberate consequence: any source-format field the Node URL form cannot express is **not** preserved downstream — so a node arriving as a Clash YAML proxy keeps only what survives the round trip into a Node URL. See ADR-0003.
+
 ## Target Format
 The client config format a subscription request resolves to (clash, sing-box, surge, loon, quanx, egern, base64). Decided jointly by the request **User-Agent** and URL parameters.
 
