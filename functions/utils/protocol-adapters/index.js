@@ -148,6 +148,9 @@ const vlessAdapter = {
         if (proxy.flow) params.push(`flow=${proxy.flow}`);
         const sniVal = proxy.servername !== undefined ? proxy.servername : proxy.sni;
         if (sniVal !== undefined) params.push(`sni=${encodeURIComponent(sniVal)}`);
+        if (proxy.skipCertVerify || proxy['skip-cert-verify']) params.push('allowInsecure=1');
+        const vlessAlpn = Array.isArray(proxy.alpn) ? proxy.alpn.join(',') : proxy.alpn;
+        if (vlessAlpn) params.push(`alpn=${encodeURIComponent(vlessAlpn)}`);
         if (proxy['client-fingerprint']) params.push(`fp=${encodeURIComponent(proxy['client-fingerprint'])}`);
         if (proxy['dialer-proxy']) params.push(`dp=${encodeURIComponent(proxy['dialer-proxy'])}`);
         return `vless://${uuid}@${server}:${port}?${params.join('&')}#${encodeURIComponent(name)}`;
@@ -222,6 +225,8 @@ const trojanAdapter = {
         }
         if (proxy.sni !== undefined) params.push(`sni=${encodeURIComponent(proxy.sni)}`);
         if (proxy.skipCertVerify || proxy['skip-cert-verify']) params.push('allowInsecure=1');
+        if (proxy['client-fingerprint']) params.push(`fp=${encodeURIComponent(proxy['client-fingerprint'])}`);
+        if (proxy['dialer-proxy']) params.push(`dp=${encodeURIComponent(proxy['dialer-proxy'])}`);
         const query = params.length > 0 ? `?${params.join('&')}` : '';
         return `trojan://${encodeURIComponent(proxy.password)}@${server}:${port}${query}#${encodeURIComponent(name)}`;
     }
@@ -327,8 +332,11 @@ const vmessAdapter = {
             path: '',
             tls: proxy.tls ? 'tls' : '',
             sni: proxy.sni || proxy.servername || '',
-            fp: proxy['client-fingerprint'] || ''
+            fp: proxy['client-fingerprint'] || '',
+            scy: proxy.cipher || 'auto'
         };
+
+        if (proxy.alpn) vmessConfig.alpn = Array.isArray(proxy.alpn) ? proxy.alpn.join(',') : proxy.alpn;
 
         if (network === 'ws') {
             const ws = readWsOpts(proxy);
@@ -502,14 +510,19 @@ const ssAdapter = {
         let url = `ss://${userInfo}@${server}:${port}`;
         if (proxy.plugin) {
             const params = [];
-            params.push(`plugin=${encodeURIComponent(proxy.plugin)}`);
-            const pluginOpts = proxy['plugin-opts'];
-            if (pluginOpts) {
-                if (pluginOpts.enabled !== undefined) params.push(`enabled=${pluginOpts.enabled}`);
-                if (pluginOpts.padding !== undefined) params.push(`padding=${pluginOpts.padding}`);
-                if (pluginOpts.mode) params.push(`obfs=${encodeURIComponent(pluginOpts.mode)}`);
-                if (pluginOpts.host) params.push(`obfs-host=${encodeURIComponent(pluginOpts.host)}`);
+            const pluginOpts = proxy['plugin-opts'] || {};
+            // 把除 mode/host 外的全部 plugin-opts 序列化进 SIP003 插件串
+            // （parseSsPlugin 读取这些）；mode/host 仍走 obfs/obfs-host 参数，保持既有行为。
+            const pluginParts = [proxy.plugin];
+            for (const [key, value] of Object.entries(pluginOpts)) {
+                if (key === 'mode' || key === 'host') continue;
+                if (value === true) pluginParts.push(key);
+                else if (value === false) pluginParts.push(`${key}=false`);
+                else pluginParts.push(`${key}=${value}`);
             }
+            params.push(`plugin=${encodeURIComponent(pluginParts.join(';'))}`);
+            if (pluginOpts.mode) params.push(`obfs=${encodeURIComponent(pluginOpts.mode)}`);
+            if (pluginOpts.host) params.push(`obfs-host=${encodeURIComponent(pluginOpts.host)}`);
             if (params.length > 0) url += `?${params.join('&')}`;
         }
         return `${url}#${encodeURIComponent(name)}`;
