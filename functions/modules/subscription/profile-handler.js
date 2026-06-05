@@ -6,6 +6,7 @@ import { runOperatorChain } from '../../utils/operator-runner.js';
 import { adaptLegacyTransform } from '../../utils/legacy-transform-adapter.js';
 import { KV_KEY_SUBS, KV_KEY_PROFILES, KV_KEY_SETTINGS, DEFAULT_SETTINGS } from '../config.js';
 import { fetchSubscriptionNodes } from './node-fetcher.js';
+import { warmProtectiveNodeCache } from '../../services/protective-node-cache.js';
 import { applyManualNodeName } from '../utils/node-cleaner.js';
 
 function ensureArray(data) {
@@ -104,6 +105,15 @@ export async function handleProfileMode(request, env, profileId, userAgent, appl
     const subscriptionResults = await Promise.all(
         targetSubscriptions.map(sub => fetchSubscriptionNodes(sub.url, sub.name, userAgent, sub.customUserAgent, false, sub.exclude, sub.fetchProxy, skipCertVerify, Boolean(sub?.plusAsSpace)))
     );
+
+    // 预热保护性缓存：预览成功的成员机场（开启开关）写入「上次成功」原始节点快照
+    await Promise.all(targetSubscriptions.map((sub, index) => {
+        const fetched = subscriptionResults[index];
+        if (sub?.enableNodeCache !== true || !fetched?.success || !Array.isArray(fetched.nodes) || fetched.nodes.length === 0) {
+            return null;
+        }
+        return warmProtectiveNodeCache(storageAdapter, sub, fetched.nodes.map(node => node.url));
+    }));
 
     // 合并所有结果
     const allResults = [...subscriptionResults, ...manualNodeResults];

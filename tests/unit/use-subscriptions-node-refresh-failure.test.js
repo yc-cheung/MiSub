@@ -87,7 +87,7 @@ describe('useSubscriptions manual node refresh failures', () => {
     }
   });
 
-  it('keeps stale node count and traffic when protective node cache is enabled', async () => {
+  it('keeps stale node count and traffic but persists lastError when protective node cache is enabled', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const oldUserInfo = { upload: 1, download: 2, total: 100, expire: 999 };
     mocks.subscriptionsRef.value = [{
@@ -117,8 +117,9 @@ describe('useSubscriptions manual node refresh failures', () => {
       expect(mocks.subscriptionsRef.value[0].userInfo).toBe(oldUserInfo);
       expect(mocks.subscriptionsRef.value[0].lastError).toBe('HTTP 403: Forbidden');
       expect(errorSpy).toHaveBeenCalledWith('[handleUpdateNodeCount] Failed for Airport:', 'HTTP 403: Forbidden');
-      expect(markDirty).not.toHaveBeenCalled();
-      expect(mocks.saveData).not.toHaveBeenCalled();
+      // lastError 需持久化，否则刷新页面后「已用缓存」徽标会消失
+      expect(markDirty).toHaveBeenCalledTimes(1);
+      expect(mocks.saveData).toHaveBeenCalledTimes(1);
     } finally {
       errorSpy.mockRestore();
     }
