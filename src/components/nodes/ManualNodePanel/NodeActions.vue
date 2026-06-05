@@ -1,6 +1,7 @@
 <script setup>
 import { computed } from 'vue';
 import MoreActionsMenu from '@/components/shared/MoreActionsMenu.vue';
+import { UNGROUPED_KEY } from '@/composables/manual-nodes/groups.js';
 
 const props = defineProps({
   manualNodesCount: {
@@ -72,9 +73,9 @@ const searchModel = computed({
            :class="!activeGroupFilter ? 'bg-indigo-100 text-indigo-700 border-indigo-200 dark:bg-indigo-900 dark:text-indigo-300 dark:border-indigo-700' : 'bg-white text-gray-600 border-gray-200 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-700'"
          >全部</button>
          <button 
-           @click="emit('set-group-filter', '默认')"
+           @click="emit('set-group-filter', UNGROUPED_KEY)"
            class="px-2.5 py-1 text-xs font-medium misub-radius-md transition-all border shrink-0 whitespace-nowrap"
-           :class="activeGroupFilter === '默认' ? 'bg-indigo-100 text-indigo-700 border-indigo-200 dark:bg-indigo-900 dark:text-indigo-300 dark:border-indigo-700' : 'bg-white text-gray-600 border-gray-200 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-700'"
+           :class="activeGroupFilter === UNGROUPED_KEY ? 'bg-indigo-100 text-indigo-700 border-indigo-200 dark:bg-indigo-900 dark:text-indigo-300 dark:border-indigo-700' : 'bg-white text-gray-600 border-gray-200 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-700'"
          >未分组</button>
          <button 
            v-for="group in manualNodeGroups" 
@@ -111,7 +112,7 @@ const searchModel = computed({
           <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M3 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" clip-rule="evenodd" /></svg>
         </button>
       </div>
-      <button @click="emit('ping-all')" class="shrink-0 rounded-lg bg-green-500/10 px-4 py-2 text-sm font-medium text-green-700 transition-colors hover:bg-green-500/20 dark:text-green-400">全部测速</button>
+      <button @click="emit('ping-all')" class="shrink-0 rounded-lg bg-green-500/10 px-4 py-2 text-sm font-medium text-green-700 transition-colors hover:bg-green-500/20 dark:text-green-400" title="仅测试已启用的节点">测速已启用</button>
       <button @click="emit('add')" class="shrink-0 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-700">新增</button>
       <MoreActionsMenu menu-width-class="w-36">
         <template #menu="{ close }">
@@ -147,9 +148,9 @@ const searchModel = computed({
       :class="!activeGroupFilter ? 'bg-indigo-50 border-indigo-200 text-indigo-700 dark:bg-indigo-900/30 dark:border-indigo-700/50 dark:text-indigo-300' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50 dark:bg-gray-800 dark:border-gray-700 dark:text-gray-400 dark:hover:bg-gray-700'"
     >全部</button>
     <button 
-      @click="emit('set-group-filter', '默认')"
+      @click="emit('set-group-filter', UNGROUPED_KEY)"
       class="px-3 py-1 text-xs font-medium misub-radius-md transition-all border shrink-0"
-      :class="activeGroupFilter === '默认' ? 'bg-indigo-50 border-indigo-200 text-indigo-700 dark:bg-indigo-900/30 dark:border-indigo-700/50 dark:text-indigo-300' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50 dark:bg-gray-800 dark:border-gray-700 dark:text-gray-400 dark:hover:bg-gray-700'"
+      :class="activeGroupFilter === UNGROUPED_KEY ? 'bg-indigo-50 border-indigo-200 text-indigo-700 dark:bg-indigo-900/30 dark:border-indigo-700/50 dark:text-indigo-300' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50 dark:bg-gray-800 dark:border-gray-700 dark:text-gray-400 dark:hover:bg-gray-700'"
     >未分组</button>
     <button 
       v-for="group in manualNodeGroups" 

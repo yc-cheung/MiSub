@@ -1,13 +1,13 @@
 import { computed, ref, watch } from 'vue';
-import { MANUAL_NODE_COUNTRY_ALIAS_MAP } from '@/constants/manualNodeCountryAliases.js';
-
-const SEARCH_NODES_PER_PAGE = 24;
+import { filterManualNodes } from './filters.js';
 
 export function useManualNodeSearchPagination(options) {
   const {
     manualNodes,
     paginatedManualNodes,
     initialSearchTerm,
+    activeGroupFilter = ref(null),
+    itemsPerPage = ref(24),
     onBasePageChange,
     onSearchTermChange
   } = options;
@@ -29,28 +29,19 @@ export function useManualNodeSearchPagination(options) {
     }
   });
 
-  const filteredNodes = computed(() => {
-    if (!localSearchTerm.value) {
-      return manualNodes.value;
-    }
+  // 单一搜索源：分组 + 搜索 + 地区别名都交给 filterManualNodes，避免与 store 级过滤逻辑漂移。
+  const filteredNodes = computed(() =>
+    filterManualNodes(manualNodes.value, localSearchTerm.value, activeGroupFilter.value)
+  );
 
-    const searchQuery = localSearchTerm.value.toLowerCase().trim();
-
-    return manualNodes.value.filter((node) => {
-      if (!node.name) return false;
-
-      const nodeName = node.name.toLowerCase();
-      if (nodeName.includes(searchQuery)) {
-        return true;
-      }
-
-      const alternativeTerms = MANUAL_NODE_COUNTRY_ALIAS_MAP[searchQuery] || [];
-      return alternativeTerms.some((term) => nodeName.includes(term.toLowerCase()));
-    });
+  // 沿用用户设置的每页条数；-1/0/非正数 视为「全部」，不分页。
+  const pageSize = computed(() => {
+    const n = Number(itemsPerPage.value);
+    return Number.isFinite(n) && n > 0 ? n : Infinity;
   });
 
   const totalSearchPages = computed(() => {
-    const total = Math.ceil(filteredNodes.value.length / SEARCH_NODES_PER_PAGE);
+    const total = Math.ceil(filteredNodes.value.length / pageSize.value);
     return total > 0 ? total : 1;
   });
 
@@ -59,8 +50,12 @@ export function useManualNodeSearchPagination(options) {
       return paginatedManualNodes.value || [];
     }
 
-    const start = (currentSearchPage.value - 1) * SEARCH_NODES_PER_PAGE;
-    const end = start + SEARCH_NODES_PER_PAGE;
+    if (pageSize.value === Infinity) {
+      return filteredNodes.value;
+    }
+
+    const start = (currentSearchPage.value - 1) * pageSize.value;
+    const end = start + pageSize.value;
     return filteredNodes.value.slice(start, end);
   });
 

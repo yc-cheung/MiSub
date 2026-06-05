@@ -45,6 +45,8 @@ const {
   manualNodes: computed(() => props.manualNodes),
   paginatedManualNodes: computed(() => props.paginatedManualNodes || []),
   initialSearchTerm: computed(() => props.searchTerm || ''),
+  activeGroupFilter: computed(() => props.activeGroupFilter),
+  itemsPerPage: computed(() => props.itemsPerPage),
   onBasePageChange: (page) => emit('changePage', page),
   onSearchTermChange: (value) => emit('update:searchTerm', value)
 });
@@ -80,15 +82,8 @@ const toggleSelectAll = () => {
 };
 
 const handleBatchGroup = () => {
+    // 保留选中态，等批量分组操作完成后再清空（取消弹窗时不丢选择）。
     emit('open-batch-group-modal', Array.from(selectedNodeIds.value));
-    // Do not clear selection yet, wait for action to complete?
-    // Or clear it now? If user cancels modal, selection is lost.
-    // Better to keep selection until action confirms.
-    // But if we clear here, we can't re-select easily.
-    // Let's NOT clear here. The parent can handle it or we clear on success?
-    // Actually, usually we clear after the operation is DONE.
-    // Since operation is async/handled by parent, we might need a way to clear selection.
-    // For now, let's keep selection.
 };
 
 const handleBatchDelete = () => {
