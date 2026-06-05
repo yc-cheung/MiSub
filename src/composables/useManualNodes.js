@@ -215,12 +215,13 @@ export function useManualNodes(markDirty) {
   });
 
   function reorderManualNodes(newOrder) {
-    // 1. Get all Subscriptions (to preserve them)
-    const currentSubscriptions = (allSubscriptions.value || []).filter(item => item.url && /^https?:\/\//.test(item.url));
+    // 1. 用补集保留手动节点之外的所有条目（http 订阅、未知协议节点、空 url 草稿等），
+    //    避免"中间地带"的条目在拖拽排序后被静默丢弃。
+    const reorderedIds = new Set(newOrder.map(n => n.id));
+    const others = (allSubscriptions.value || []).filter(item => !reorderedIds.has(item.id));
 
-    // 2. Combine Existing Subscriptions + New Ordered Manual Nodes
-    // Logic: Manual Nodes at top, Subscriptions at bottom
-    const mergedList = [...newOrder, ...currentSubscriptions];
+    // 2. Combine: Manual Nodes at top, others at bottom
+    const mergedList = [...newOrder, ...others];
 
     // 3. Update Store
     dataStore.overwriteSubscriptions(mergedList);

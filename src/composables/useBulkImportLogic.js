@@ -4,6 +4,7 @@ import { extractNodeName } from '../lib/utils.js';
 import { generateNodeId, generateSubscriptionId } from '../utils/id.js';
 import { COMMON_NODE_PROTOCOLS, createProtocolRegex } from '@/constants/nodeProtocols.js';
 import { normalizeManualNodeGroupName } from './manual-nodes/groups.js';
+import { normalizeNodeInput } from '@/utils/protocols/normalizeNodeInput.js';
 
 const BULK_IMPORT_NODE_PROTOCOLS = COMMON_NODE_PROTOCOLS.filter(protocol => protocol !== 'http' && protocol !== 'https');
 const BULK_IMPORT_NODE_REGEX = createProtocolRegex(BULK_IMPORT_NODE_PROTOCOLS, false);
@@ -38,6 +39,12 @@ export function useBulkImportLogic({ addSubscriptionsFromBulk, addNodesFromBulk 
                 validSubs.push({ ...baseItem, id: generateSubscriptionId() });
             } else if (BULK_IMPORT_NODE_REGEX.test(line)) {
                 validNodes.push({ ...baseItem, id: generateNodeId() });
+            } else {
+                // 非标准 URL（如 Surge 配置行 "名字 = snell, host, port, psk=..."）尝试转换为标准节点 URL
+                const converted = normalizeNodeInput(line);
+                if (converted && BULK_IMPORT_NODE_REGEX.test(converted)) {
+                    validNodes.push({ ...baseItem, url: converted, name: extractNodeName(converted) || baseItem.name, id: generateNodeId() });
+                }
             }
         });
 
