@@ -295,7 +295,7 @@ export function useManualNodes(markDirty) {
       const nodesToTest = enabledManualNodes.value.map(n => n.id);
       if (nodesToTest.length === 0) return;
       
-      showToast(`开始测速 ${nodesToTest.length} 个节点...`, 'info');
+      showToast(`开始探测 ${nodesToTest.length} 个节点的可达性...`, 'info');
       
       // 控制并发数 (比如最大 10 并发)
       const CONCURRENCY = 10;
