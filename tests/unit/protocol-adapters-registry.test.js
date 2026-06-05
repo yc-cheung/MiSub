@@ -88,3 +88,83 @@ describe('one-directional adapters', () => {
         expect(urlToProxy('socks5://user:pw@a.com:1080?tls=1#n')).toMatchObject({ type: 'socks5-tls', server: 'a.com' });
     });
 });
+
+// ADR-0003: build() must serialize every field parse() reads (within what the URL
+// scheme can express). These guard the symmetric invariant for connectivity-bearing
+// fields that today survive into Clash output only if the round trip preserves them.
+describe('rich-field round trips (ADR-0003 symmetric build/parse invariant)', () => {
+    it('vless preserves skip-cert-verify across proxy -> url -> proxy', () => {
+        const proxy = {
+            name: 'n', type: 'vless', server: 'a.com', port: 443, uuid: 'u-1',
+            tls: true, 'skip-cert-verify': true
+        };
+        const parsed = urlToProxy(proxyToUrl(proxy));
+        expect(parsed['skip-cert-verify']).toBe(true);
+    });
+
+    it('vless preserves alpn across proxy -> url -> proxy', () => {
+        const proxy = {
+            name: 'n', type: 'vless', server: 'a.com', port: 443, uuid: 'u-1',
+            tls: true, alpn: ['h2', 'http/1.1']
+        };
+        const parsed = urlToProxy(proxyToUrl(proxy));
+        expect(parsed.alpn).toEqual(['h2', 'http/1.1']);
+    });
+
+    it('vmess preserves cipher (scy) across proxy -> url -> proxy', () => {
+        const proxy = {
+            name: 'n', type: 'vmess', server: 'a.com', port: 443, uuid: 'u-1',
+            alterId: 0, cipher: 'aes-128-gcm'
+        };
+        const parsed = urlToProxy(proxyToUrl(proxy));
+        expect(parsed.cipher).toBe('aes-128-gcm');
+    });
+
+    it('vmess preserves alpn across proxy -> url -> proxy', () => {
+        const proxy = {
+            name: 'n', type: 'vmess', server: 'a.com', port: 443, uuid: 'u-1',
+            alterId: 0, cipher: 'auto', tls: true, alpn: ['h2']
+        };
+        const parsed = urlToProxy(proxyToUrl(proxy));
+        expect(parsed.alpn).toEqual(['h2']);
+    });
+
+    it('trojan preserves client-fingerprint (fp) across proxy -> url -> proxy', () => {
+        const proxy = {
+            name: 'n', type: 'trojan', server: 'a.com', port: 443, password: 'pw',
+            'client-fingerprint': 'chrome'
+        };
+        const parsed = urlToProxy(proxyToUrl(proxy));
+        expect(parsed['client-fingerprint']).toBe('chrome');
+    });
+
+    it('trojan preserves dialer-proxy (dp) across proxy -> url -> proxy', () => {
+        const proxy = {
+            name: 'n', type: 'trojan', server: 'a.com', port: 443, password: 'pw',
+            'dialer-proxy': 'relay-out'
+        };
+        const parsed = urlToProxy(proxyToUrl(proxy));
+        expect(parsed['dialer-proxy']).toBe('relay-out');
+    });
+
+    it('ss preserves full v2ray-plugin opts (path/tls/mux + mode/host) across proxy -> url -> proxy', () => {
+        const proxy = {
+            name: 'n', type: 'ss', server: 'a.com', port: 8388,
+            cipher: 'aes-256-gcm', password: 'pw',
+            plugin: 'v2ray-plugin',
+            'plugin-opts': { mode: 'websocket', host: 'cdn.example.com', path: '/ws', tls: true, mux: true }
+        };
+        const parsed = urlToProxy(proxyToUrl(proxy));
+        expect(parsed.plugin).toBe('v2ray-plugin');
+        expect(parsed['plugin-opts']).toMatchObject({
+            mode: 'websocket', host: 'cdn.example.com', path: '/ws', tls: true, mux: true
+        });
+    });
+
+    it('parses base64 query fields with a literal + without corrupting them (wireguard public-key)', () => {
+        // A producer that emits a raw base64 key with a literal '+' (not %2B-encoded);
+        // URLSearchParams would otherwise turn the '+' into a space.
+        const parsed = urlToProxy('wireguard://x@a.com:51820?publickey=abc+def/ghi=#n');
+        expect(parsed['public-key']).toBe('abc+def/ghi=');
+    });
+});

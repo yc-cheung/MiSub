@@ -19,7 +19,10 @@ export function parseQueryParams(url) {
         ? url.substring(queryIndex + 1, hashIndex)
         : url.substring(queryIndex + 1);
 
-    return new URLSearchParams(queryString);
+    // URLSearchParams 会把字面 '+' 解码成空格，破坏含 '+' 的 base64 字段
+    // （WireGuard 公钥/预共享密钥、hy2 obfs-password、reality pbk）。订阅 URL 里
+    // 的 '+' 基本都是 base64 字面量而非空格，故先转义为 %2B 再交给 URLSearchParams。
+    return new URLSearchParams(queryString.replace(/\+/g, '%2B'));
 }
 
 /** 从 URL 的 fragment 提取节点名称 */
