@@ -4,6 +4,7 @@
  */
 
 import { escapeHtml, createJsonResponse } from '../../utils.js';
+import { safeFetchPublicNetworkUrl } from '../../security-utils.js';
 import { clearAllNodeCaches } from '../../../services/node-cache-service.js';
 import { KV_KEY_SUBS, KV_KEY_PROFILES, KV_KEY_SETTINGS } from '../../config.js';
 import {
@@ -929,7 +930,8 @@ export async function handleImportCommand(chatId, userId, args, env) {
             await sendTelegramMessage(chatId, '⏳ 正在获取订阅内容...', env);
 
             try {
-                const response = await fetch(input, {
+                // 用户提供的 URL：封私网/loopback/元数据 + 逐跳重校验 redirect（防 SSRF）
+                const response = await safeFetchPublicNetworkUrl(input, {
                     method: 'GET',
                     headers: {
                         'User-Agent': 'v2rayN/7.23',

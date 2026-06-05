@@ -5,6 +5,7 @@
 
 import { StorageFactory } from '../../../storage-adapter.js';
 import { KV_KEY_SETTINGS } from '../../config.js';
+import { timingSafeEqual } from '../../security-utils.js';
 import { createTelegramTransport } from '../telegram-transport.js';
 
 // ==================== 存储与配置 ====================
@@ -222,9 +223,10 @@ export async function answerCallbackQuery(callbackQueryId, text, env, showAlert 
 
 // ==================== 验证 / 绑定 / 权限 / 限流 ====================
 
-export function verifyTelegramRequest(request, config) {
+export async function verifyTelegramRequest(request, config) {
     const secretToken = request.headers.get('X-Telegram-Bot-Api-Secret-Token');
-    return secretToken === config.webhook_secret;
+    // 常量时间比较：缺失/不等长/不相等均返回 false（webhook 是特权命令唯一入口）。
+    return timingSafeEqual(secretToken, config.webhook_secret);
 }
 
 export function getUserBindingKey(userId) {

@@ -108,7 +108,7 @@ export async function handleTelegramWebhook(request, env) {
             return createJsonResponse({ error: 'Webhook secret required' }, 503);
         }
 
-        if (!verifyTelegramRequest(request, config)) {
+        if (!(await verifyTelegramRequest(request, config))) {
             console.error('[Telegram Push] Invalid webhook secret');
             return createJsonResponse({ error: 'Unauthorized' }, 401);
         }

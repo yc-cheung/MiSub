@@ -30,6 +30,7 @@ import { StorageFactory, SettingsCache } from './storage-adapter.js';
 import { KV_KEY_SETTINGS, DEFAULT_SETTINGS as defaultSettings } from './modules/config.js';
 import { handleCronTrigger } from './modules/notifications.js';
 import { authMiddleware } from './modules/auth-middleware.js';
+import { timingSafeEqual } from './modules/security-utils.js';
 
 function parseCorsOrigins(env, requestUrl) {
     const configured = (env?.CORS_ORIGINS || '')
@@ -188,9 +189,14 @@ export async function onRequest(context) {
 
                 const cronAuthHeader = request.headers.get('Authorization');
                 const cronSecretParam = url.searchParams.get('secret');
+                // 常量时间比较，避免 === 短路计时旁路；仍同时接受 header 与 ?secret= query
+                // （query 传参保留以兼容现有触发 URL，但会进访问日志/Referer）。
+                const bearerSecret = cronAuthHeader?.startsWith('Bearer ')
+                    ? cronAuthHeader.slice('Bearer '.length)
+                    : null;
                 const isAuthorized =
-                    cronAuthHeader === `Bearer ${expectedSecret}` ||
-                    cronSecretParam === expectedSecret;
+                    (bearerSecret && await timingSafeEqual(bearerSecret, expectedSecret)) ||
+                    (cronSecretParam && await timingSafeEqual(cronSecretParam, expectedSecret));
 
                 if (!isAuthorized) {
                     return createJsonResponse({ error: 'Unauthorized' }, 401);

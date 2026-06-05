@@ -164,6 +164,59 @@ export function assertPublicNetworkUrl(inputUrl) {
     return validation.url;
 }
 
+/**
+ * 抓取公网内容并逐跳重校验 redirect：阻止私网/loopback/元数据目标（含通过 302 跳转），
+ * 但放行任意公网域名（用 validatePublicNetworkUrl，而非 GitHub 白名单的 validatePublicFetchUrl）。
+ * 用 redirect:'manual' 手动跟随，对每个 Location 重新 assertPublicNetworkUrl。
+ * options.fetchImpl 可注入（如订阅抓取复用带重试/超时/cf 的 fetchWithRetry）。
+ */
+export async function safeFetchPublicNetworkUrl(inputUrl, init = {}, options = {}) {
+    const maxRedirects = options.maxRedirects ?? MAX_SAFE_REDIRECTS;
+    const fetchImpl = options.fetchImpl || fetch;
+    let currentUrl = assertPublicNetworkUrl(inputUrl).toString();
+
+    for (let i = 0; i <= maxRedirects; i++) {
+        const response = await fetchImpl(currentUrl, { ...init, redirect: 'manual' });
+        if (!isRedirectStatus(response.status)) return response;
+
+        const location = response.headers.get('Location');
+        if (!location) return response;
+        if (i >= maxRedirects) {
+            const error = new Error('Too many redirects');
+            error.status = 400;
+            throw error;
+        }
+        // 释放 3xx 响应体，避免连接占用
+        try { await response.body?.cancel(); } catch { /* noop */ }
+        currentUrl = assertPublicNetworkUrl(new URL(location, currentUrl).toString()).toString();
+    }
+
+    const error = new Error('Too many redirects');
+    error.status = 400;
+    throw error;
+}
+
+/**
+ * 常量时间字符串比较（双 HMAC）。用同一个临时密钥对两侧签名，再逐字节比较定长摘要——
+ * 比较耗时与“前多少字节相同”无关，避免 === 的短路计时旁路。用于 cron / webhook 密钥校验。
+ */
+export async function timingSafeEqual(a, b) {
+    if (typeof a !== 'string' || typeof b !== 'string' || a.length === 0 || b.length === 0) {
+        return false;
+    }
+    const enc = new TextEncoder();
+    const key = await crypto.subtle.generateKey({ name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    const [sigA, sigB] = await Promise.all([
+        crypto.subtle.sign('HMAC', key, enc.encode(a)),
+        crypto.subtle.sign('HMAC', key, enc.encode(b))
+    ]);
+    const va = new Uint8Array(sigA);
+    const vb = new Uint8Array(sigB);
+    let diff = 0;
+    for (let i = 0; i < va.length; i++) diff |= va[i] ^ vb[i];
+    return diff === 0;
+}
+
 function isRedirectStatus(status) {
     return [301, 302, 303, 307, 308].includes(status);
 }
