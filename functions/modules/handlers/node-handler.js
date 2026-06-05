@@ -7,6 +7,7 @@ import { StorageFactory } from '../../storage-adapter.js';
 import { DEFAULT_SETTINGS, KV_KEY_SETTINGS } from '../config.js';
 import { createJsonResponse, createErrorResponse } from '../utils.js';
 import { parseNodeList } from '../utils/node-parser.js';
+import { warmProtectiveNodeCache } from '../../services/protective-node-cache.js';
 import { getProcessedUserAgent } from '../../utils/format-utils.js';
 import { buildFetchProxyUrl } from '../../utils/fetch-proxy-utils.js';
 
@@ -78,6 +79,7 @@ export async function handleNodeCountRequest(request, env) {
         let trafficRequestSucceeded = false;
         let nodeCountRequestSucceeded = false;
         let fetchError = null;
+        let parsedNodeUrls = []; // 成功解析出的原始节点 URL，用于预热保护性缓存
 
         let requestUrl = subUrl;
         const requestedUserAgent = typeof customUserAgent === 'string' ? customUserAgent.trim() : '';
@@ -265,6 +267,7 @@ export async function handleNodeCountRequest(request, env) {
 
                     if (parsedNodes.length > 0) {
                         result.count = parsedNodes.length;
+                        parsedNodeUrls = parsedNodes.map(node => node.url);
                         nodeCountRequestSucceeded = true;
                     } else {
                         fetchError = fetchError || new Error('No valid nodes returned from subscription');
@@ -380,6 +383,11 @@ export async function handleNodeCountRequest(request, env) {
                             target.lastUpdate = new Date().toISOString();
                             await storageAdapter.put('misub_subscriptions_v1', allSubs);
                         }
+                    }
+
+                    // 预热保护性缓存：开启开关的订阅，更新成功即写入「上次成功」原始节点快照
+                    if (subToUpdate.enableNodeCache === true && parsedNodeUrls.length > 0) {
+                        await warmProtectiveNodeCache(storageAdapter, subToUpdate, parsedNodeUrls);
                     }
                 }
             } else {

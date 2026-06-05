@@ -14,9 +14,12 @@
 
 import { StorageFactory } from './storage-adapter.js';
 import { SYSTEM_CONSTANTS } from './modules/config.js';
+import { warmProtectiveNodeCache } from './services/protective-node-cache.js';
 
 // 与 notifications.js 中保持一致的节点协议匹配规则
 const NODE_REGEX = /^(ss|ssr|vmess|vless|trojan|hysteria2?|hy|hy2|tuic|anytls|socks5|socks):\/\//gm;
+// 整行匹配（非全局）：用于提取完整节点行，区别于仅匹配协议前缀的 NODE_REGEX
+const NODE_LINE_REGEX = /^(ss|ssr|vmess|vless|trojan|hysteria2?|hy|hy2|tuic|anytls|socks5|socks):\/\//i;
 
 async function getStorageAdapter(env) {
     const storageType = await StorageFactory.getStorageType(env);
@@ -97,9 +100,13 @@ export async function performSubscriptionSync(env, config = {}) {
 
         const syncOne = async (subscription) => {
             try {
-                const nodeCount = await syncSingleSubscription(subscription, syncTimeout);
+                const { nodeCount, nodes } = await syncSingleSubscription(subscription, syncTimeout);
                 subscription.nodeCount = nodeCount;
                 changesMade = true;
+                // 预热保护性缓存：定时同步成功也刷新「上次成功」原始节点快照
+                if (subscription.enableNodeCache === true && nodes.length > 0) {
+                    await warmProtectiveNodeCache(storageAdapter, subscription, nodes);
+                }
                 results.successfulSyncs++;
                 results.details.push({
                     name: subscription.name,
@@ -162,6 +169,10 @@ async function syncSingleSubscription(subscription, timeout) {
         decoded = text;
     }
 
-    const matches = decoded.match(NODE_REGEX);
-    return matches ? matches.length : 0;
+    // NODE_REGEX 仅匹配协议前缀，无法直接作为节点；按行提取完整节点 URL
+    const nodes = decoded
+        .split('\n')
+        .map(line => line.trim())
+        .filter(line => NODE_LINE_REGEX.test(line));
+    return { nodeCount: nodes.length, nodes };
 }

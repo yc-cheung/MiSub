@@ -148,6 +148,7 @@ watch(() => props.show, (newVal) => {
                             <!-- Status Indicator Stripe -->
                             <div class="absolute left-0 top-0 bottom-0 w-1" :class="{
                                 'bg-green-500': log.status === 'success',
+                                'bg-amber-500': log.status === 'cached',
                                 'bg-yellow-500': log.status === 'partial',
                                 'bg-red-500': log.status === 'error'
                             }"></div>

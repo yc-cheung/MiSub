@@ -79,6 +79,33 @@ describe('_schedule.js subscription sync storage access', () => {
     ]);
   });
 
+  it('enableNodeCache 开启的订阅，定时同步成功时预热保护性缓存（原始节点）', async () => {
+    const { performSubscriptionSync } = await import('../../functions/_schedule.js');
+
+    getAllSubscriptions.mockResolvedValue([
+      { id: 'sub-1', name: 'Sub One', url: 'https://sub.example.com', enabled: true, enableNodeCache: true }
+    ]);
+
+    await performSubscriptionSync({});
+
+    expect(put).toHaveBeenCalledWith(
+      'node_cache_subscription_sub-1',
+      expect.objectContaining({ nodes: ['ss://node-one', 'vmess://node-two'] })
+    );
+  });
+
+  it('enableNodeCache 关闭的订阅，定时同步不预热缓存', async () => {
+    const { performSubscriptionSync } = await import('../../functions/_schedule.js');
+
+    getAllSubscriptions.mockResolvedValue([
+      { id: 'sub-2', name: 'Sub Two', url: 'https://sub2.example.com', enabled: true, enableNodeCache: false }
+    ]);
+
+    await performSubscriptionSync({});
+
+    expect(put).not.toHaveBeenCalled();
+  });
+
   it('skips disabled and non-http subscriptions', async () => {
     const { performSubscriptionSync } = await import('../../functions/_schedule.js');
 

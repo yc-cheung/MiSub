@@ -116,6 +116,84 @@ describe('subscription protective node cache', () => {
         expect(cache.nodes).toEqual(['trojan://cached@example.com:443#Cached']);
     });
 
+    it('enableNodeCache 开启时，看似成功但节点数骤降（不足旧缓存一半）视为软失败，不覆盖且仍供旧缓存', async () => {
+        const cacheKey = buildSubscriptionNodeCacheKey({ id: 'sub-a', url: 'https://example.com/sub' });
+        const cachedNodes = [
+            'trojan://cached@example.com:443#A',
+            'trojan://cached@example.com:443#B',
+            'trojan://cached@example.com:443#C',
+            'trojan://cached@example.com:443#D'
+        ];
+        const storage = createMemoryStorage({
+            [cacheKey]: { nodes: cachedNodes, nodeCount: 4, updatedAt: '2026-01-01T00:00:00.000Z' }
+        });
+        // 机场限时关闭：HTTP 200，但只返回 1 个真实节点（远少于旧缓存的一半）
+        vi.stubGlobal('fetch', vi.fn(async () => new Response('trojan://degraded@example.com:443#Expired', { status: 200 })));
+
+        const result = await generateCombinedNodeList(
+            { storage },
+            { enableAccessLog: false, enableFlagEmoji: false },
+            'ClashMeta',
+            [{ id: 'sub-a', name: '机场A', url: 'https://example.com/sub', enabled: true, enableNodeCache: true }],
+            '',
+            { enableSubscriptions: false },
+            false
+        );
+
+        const cache = await storage.get(cacheKey);
+        expect(result.trim().split('\n')).toEqual(cachedNodes);
+        expect(cache.nodes).toEqual(cachedNodes);
+    });
+
+    it('从缓存恢复时走同一条处理管线：输出与活节点一致（含订阅名前缀）', async () => {
+        const storage = createMemoryStorage();
+        const sub = { id: 'sub-a', name: '机场A', url: 'https://example.com/sub', enabled: true, enableNodeCache: true };
+        const config = { enableAccessLog: false, enableFlagEmoji: false };
+        const profileSettings = {}; // enableSubscriptions 默认 true → 套用订阅名前缀
+
+        // 第一次：成功，写入缓存
+        vi.stubGlobal('fetch', vi.fn(async () => new Response('trojan://pass@example.com:443#HK', { status: 200 })));
+        const live = await generateCombinedNodeList({ storage }, config, 'ClashMeta', [sub], '', profileSettings, false);
+
+        // 第二次：失败，应供出与活节点完全一致的输出
+        vi.stubGlobal('fetch', vi.fn(async () => new Response('Forbidden', { status: 403 })));
+        const restored = await generateCombinedNodeList({ storage }, config, 'ClashMeta', [sub], '', profileSettings, false);
+
+        expect(live.trim()).not.toBe('');
+        // 活节点确实带订阅名前缀（与未加前缀的裸节点不同）
+        expect(live.trim()).not.toBe('trojan://pass@example.com:443#HK');
+        expect(restored.trim()).toBe(live.trim());
+    });
+
+    it('快照存原始节点：恢复时重跑订阅级过滤，机场挂掉期间新增的过滤规则也对缓存节点生效', async () => {
+        const storage = createMemoryStorage();
+        const baseSub = { id: 'sub-a', name: '机场A', url: 'https://example.com/sub', enabled: true, enableNodeCache: true };
+        const config = { enableAccessLog: false, enableFlagEmoji: false };
+        const profileSettings = { enableSubscriptions: false };
+
+        // 第一次：成功，缓存两个原始节点（无过滤）
+        vi.stubGlobal('fetch', vi.fn(async () => new Response(
+            'trojan://a@example.com:443#Alpha\ntrojan://b@example.com:443#Beta',
+            { status: 200 }
+        )));
+        const live = await generateCombinedNodeList({ storage }, config, 'ClashMeta', [baseSub], '', profileSettings, false);
+        expect(live.trim().split('\n').sort()).toEqual([
+            'trojan://a@example.com:443#Alpha',
+            'trojan://b@example.com:443#Beta'
+        ]);
+
+        // 机场挂掉期间，用户给该订阅加了排除规则 Beta
+        vi.stubGlobal('fetch', vi.fn(async () => new Response('Forbidden', { status: 403 })));
+        const restored = await generateCombinedNodeList(
+            { storage }, config, 'ClashMeta',
+            [{ ...baseSub, exclude: 'Beta' }],
+            '', profileSettings, false
+        );
+
+        // 缓存的原始节点重跑过滤管线后，Beta 被排除，只剩 Alpha
+        expect(restored.trim()).toBe('trojan://a@example.com:443#Alpha');
+    });
+
     it('外部拉取成功时，异步同步节点数和流量到前端订阅数据', async () => {
         const sub = { id: 'sub-a', name: '机场A', url: 'https://example.com/sub', enabled: true, enableNodeCache: true };
         const storage = createMemoryStorage({

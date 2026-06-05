@@ -28,6 +28,15 @@ const getProtocol = (url) => {
 
 const protocol = computed(() => getProtocol(props.misub.url));
 
+// 保护性缓存生效中：开启开关且上次拉取失败 → 当前展示的是「上次成功」的缓存节点
+const protectiveCacheActive = computed(() => Boolean(props.misub.enableNodeCache && props.misub.lastError));
+const lastSuccessLabel = computed(() => {
+  const ts = props.misub.lastUpdate;
+  if (!ts) return '';
+  const date = new Date(ts);
+  return Number.isNaN(date.getTime()) ? '' : date.toLocaleString();
+});
+
 const protocolStyle = computed(() => {
   const p = protocol.value;
   switch (p) {
@@ -180,6 +189,15 @@ const hasFooterMeta = computed(() => Boolean(noteWithoutUrl.value || websiteUrl.
           <span class="font-semibold text-gray-700 dark:text-gray-200">
             {{ misub.isUpdating ? '更新中...' : `${misub.nodeCount || 0} 个节点` }}
           </span>
+        </div>
+        <div
+          v-if="protectiveCacheActive"
+          data-testid="protective-cache-badge"
+          class="flex items-center gap-1 text-[10px] text-amber-600 dark:text-amber-400"
+          :title="lastSuccessLabel ? `机场拉取失败，正在使用上次成功（${lastSuccessLabel}）的缓存节点` : '机场拉取失败，正在使用上次成功的缓存节点'"
+        >
+          <svg class="w-3 h-3 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+          <span>已用缓存{{ lastSuccessLabel ? ` · 上次成功 ${lastSuccessLabel}` : '' }}</span>
         </div>
       </div>
 

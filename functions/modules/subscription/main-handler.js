@@ -961,10 +961,15 @@ export async function handleMisubRequest(context) {
         const sourceNames = targetMisubs
             .filter(s => typeof s?.url === 'string' && s.url.startsWith('http'))
             .map(s => s.name || s.url);
-        // 仅在至少一个订阅源真正从远程拉取成功时才刷新缓存时间
-        // 如果没有 HTTP 订阅源（纯手动节点/过期订阅组），则始终写入缓存
+        // 写入快速缓存的时机：
+        // - 没有 HTTP 订阅源（纯手动节点/过期订阅组）始终写入；
+        // - 至少一个订阅源真正从远程拉取成功；
+        // - 软成功：所有订阅源都失败，但结果非空（来自保护性缓存节点）——仍写入，
+        //   避免长期停机期间每次请求都重撞死机场、白白等超时。
+        //   setCache 自身拒绝用空节点覆盖非空缓存，无需担心污染。
         const stats = context.generationStats;
-        if (!stats?.sourceCount || stats.upstreamSuccessCount > 0) {
+        const resultHasNodes = freshNodes.split('\n').some(line => line.trim());
+        if (!stats?.sourceCount || stats.upstreamSuccessCount > 0 || resultHasNodes) {
             await setCache(storageAdapter, cacheKey, freshNodes, sourceNames);
         }
         return freshNodes;

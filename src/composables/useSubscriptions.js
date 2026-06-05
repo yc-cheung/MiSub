@@ -117,17 +117,18 @@ export function useSubscriptions(markDirty) {
                     if (!isInitialLoad) showToast(userMessage, 'error');
                     console.error(`[handleUpdateNodeCount] Failed for ${subToUpdate.name}:`, result.error);
 
-                    // 重要: 记录错误到本地对象中(非持久化,仅用于UI展示,直到下次持久化保存)
+                    // 记录错误。开启保护性缓存时保留旧节点数/流量（失败也不清零）。
                     subToUpdate.lastError = result.error;
                     if (subToUpdate.enableNodeCache !== true) {
                         subToUpdate.nodeCount = 0;
                         subToUpdate.userInfo = null;
-                        if (!isInitialLoad) {
-                            markDirty();
-                            void dataStore.saveData();
-                        }
                     }
-                    return; // 开启保护性缓存节点时，失败保留旧值
+                    // 持久化失败状态：lastError 需落库，否则刷新页面后「已用缓存」徽标会消失。
+                    if (!isInitialLoad) {
+                        markDirty();
+                        void dataStore.saveData();
+                    }
+                    return;
                 }
 
                 // 成功获取数据
