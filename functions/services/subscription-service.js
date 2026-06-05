@@ -11,7 +11,7 @@ import { prependNodeName, addFlagEmoji, removeFlagEmoji, fixNodeUrlEncoding, san
 import { runOperatorChain } from '../utils/operator-runner.js';
 import { adaptLegacyTransform } from '../utils/legacy-transform-adapter.js';
 import { createTimeoutFetch } from '../modules/utils.js';
-import { assertPublicNetworkUrl } from '../modules/security-utils.js';
+import { assertPublicNetworkUrl, safeFetchPublicNetworkUrl } from '../modules/security-utils.js';
 import {
     isRealProxyNode,
     buildSubscriptionNodeCacheKey,
@@ -400,9 +400,10 @@ const prependGroupName = profilePrefixSettings?.prependGroupName ?? false;
             }
             requestUrl = assertPublicNetworkUrl(requestUrl).toString();
 
-            const response = await fetchWithRetry(requestUrl, {
+            // 手动跟随 redirect 并对每跳重校验（挡恶意上游 302 跳转内网）；
+            // 复用 fetchWithRetry 保留重试/超时/cf 行为。
+            const response = await safeFetchPublicNetworkUrl(requestUrl, {
                 headers: requestHeaders,
-                redirect: "follow",
                 ...(skipCertVerify ? {
                     cf: {
                         insecureSkipVerify: true,
@@ -410,7 +411,7 @@ const prependGroupName = profilePrefixSettings?.prependGroupName ?? false;
                         validateCertificate: false
                     }
                 } : {})
-            });
+            }, { fetchImpl: fetchWithRetry });
 
             if (!response.ok) {
                 recordEmptyRuntimeInfo();
