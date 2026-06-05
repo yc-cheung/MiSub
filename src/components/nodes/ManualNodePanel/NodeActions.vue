@@ -112,7 +112,7 @@ const searchModel = computed({
           <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M3 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" clip-rule="evenodd" /></svg>
         </button>
       </div>
-      <button @click="emit('ping-all')" class="shrink-0 rounded-lg bg-green-500/10 px-4 py-2 text-sm font-medium text-green-700 transition-colors hover:bg-green-500/20 dark:text-green-400" title="仅测试已启用的节点">测速已启用</button>
+      <button @click="emit('ping-all')" class="shrink-0 rounded-lg bg-green-500/10 px-4 py-2 text-sm font-medium text-green-700 transition-colors hover:bg-green-500/20 dark:text-green-400" title="仅探测已启用节点的可达性">探测可达性</button>
       <button @click="emit('add')" class="shrink-0 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-700">新增</button>
       <MoreActionsMenu menu-width-class="w-36">
         <template #menu="{ close }">
