@@ -4,8 +4,6 @@ import { extractNodeName } from '../lib/utils.js';
 import { generateNodeId } from '../utils/id.js';
 import { normalizeNodeInput } from '../utils/protocols/normalizeNodeInput.js';
 
-const isDev = import.meta.env.DEV;
-
 export function useNodeForms({ addNode, updateNode }) {
     const { showToast } = useToastStore();
     const showModal = ref(false);
@@ -29,14 +27,8 @@ export function useNodeForms({ addNode, updateNode }) {
             console.error('UseNodeForms: openEdit called with null');
             return;
         }
-        if (isDev) {
-            console.debug('UseNodeForms: openEdit called with', node);
-        }
         isNew.value = false;
         editingNode.value = { ...node };
-        if (isDev) {
-            console.debug('UseNodeForms: editingNode set to', editingNode.value);
-        }
         showModal.value = true;
     };
 

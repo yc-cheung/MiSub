@@ -1,15 +1,11 @@
-const isDev = import.meta.env.DEV;
-
 const normalizeBase64 = (input) => {
   let s = String(input || '').trim().replace(/\s+/g, '');
   if (!s) return '';
   if (s.includes('%')) {
     try {
       s = decodeURIComponent(s);
-    } catch (error) {
-      if (isDev) {
-        console.debug('[ManualNodes] URL decode failed, using raw text:', error);
-      }
+    } catch {
+      // 不是 URL 编码，按原文继续
     }
   }
   s = s.replace(/-/g, '+').replace(/_/g, '/');
