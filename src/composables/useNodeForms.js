@@ -2,6 +2,7 @@ import { ref } from 'vue';
 import { useToastStore } from '../stores/toast.js';
 import { extractNodeName } from '../lib/utils.js';
 import { generateNodeId } from '../utils/id.js';
+import { normalizeNodeInput } from '../utils/protocols/normalizeNodeInput.js';
 
 const isDev = import.meta.env.DEV;
 
@@ -52,6 +53,14 @@ export function useNodeForms({ addNode, updateNode }) {
             showToast('节点链接不能为空', 'error');
             return;
         }
+
+        // 规范化输入：标准 URL 原样保留，Surge 配置行（如 "名字 = snell, ..."）转换为标准节点 URL
+        const normalizedUrl = normalizeNodeInput(editingNode.value.url);
+        if (!normalizedUrl) {
+            showToast('无法识别的节点格式，请粘贴标准节点链接（如 snell://...）或 Surge 配置行', 'error');
+            return;
+        }
+        editingNode.value.url = normalizedUrl;
 
         if (isNew.value) {
             addNode(editingNode.value);
