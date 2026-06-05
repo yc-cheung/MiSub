@@ -1,5 +1,8 @@
 export function buildAutoSortedSubscriptions(allSubscriptions, manualNodes) {
-  const subs = allSubscriptions.filter(s => s.url && /^https?:\/\//.test(s.url));
+  // 用补集分区：手动节点之外的所有条目（http 订阅、未知协议节点、空 url 草稿等）一律原样保留，
+  // 保证 nodes + others === 全集，避免"中间地带"的条目在排序后被静默丢弃。
+  const manualIds = new Set(manualNodes.map(n => n.id));
+  const others = allSubscriptions.filter(s => !manualIds.has(s.id));
   const nodes = [...manualNodes];
 
   const regionKeywords = { HK: [/香港/, /HK/, /Hong Kong/i], TW: [/台湾/, /TW/, /Taiwan/i], SG: [/新加坡/, /SG/, /狮城/, /Singapore/i], JP: [/日本/, /JP/, /Japan/i], US: [/美国/, /US/, /United States/i], KR: [/韩国/, /KR/, /Korea/i], GB: [/英国/, /GB/, /UK/, /United Kingdom/i], DE: [/德国/, /DE/, /Germany/i], FR: [/法国/, /FR/, /France/i], CA: [/加拿大/, /CA/, /Canada/i], AU: [/澳大利亚/, /AU/, /Australia/i], };
@@ -27,5 +30,5 @@ export function buildAutoSortedSubscriptions(allSubscriptions, manualNodes) {
     return a.name.localeCompare(b.name, 'zh-CN');
   });
 
-  return [...nodes, ...subs];
+  return [...nodes, ...others];
 }
