@@ -95,14 +95,7 @@ const handleOpenBatchGroupModal = (ids) => {
 const handleBatchGroupConfirm = (groupName) => {
   batchUpdateGroup(batchGroupIds.value, groupName);
   batchGroupIds.value = [];
-  // Ideally we should also clear selection in ManualNodePanel, but we don't have direct access.
-  // We can emit an event or use a ref, but ManualNodePanel handles selection internally.
-  // Actually, ManualNodePanel.vue creates its own `selectedNodeIds`.
-  // If we want to clear selection, we need to force re-render or expose a method.
-  // But for now, let's just do the update. User can clear selection manually.
-  // OR we can improve ManualNodePanel to clear selection when `batch-update-group` is done?
-  // But here we are calling `batchUpdateGroup` composable directly.
-  // Let's modify ManualNodePanel later if needed.
+  // 注：选中态由 ManualNodePanel 内部维护，此处不清空（已知小缺陷）。
 };
 
 const handleBatchDeleteRequest = (ids) => {
