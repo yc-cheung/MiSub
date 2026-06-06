@@ -120,3 +120,21 @@ export async function warmProtectiveNodeCache(storage, sub, rawNodes) {
     if (!shouldAcceptSnapshot(existingCount, realNodes.length)) return false;
     return writeProtectiveNodeCache(storage, sub, realNodes);
 }
+
+/**
+ * 预览回退判定：机场拉取失败 / 0 节点 / 节点数骤降时，是否改供保护性缓存节点。
+ * 与对外输出（fetchSingleSubscription）共用 shouldAcceptSnapshot，触发条件逐字一致。
+ * @param {Object} storage 存储适配器
+ * @param {Object} sub 订阅对象
+ * @param {number} liveRealCount 本次实时拉取的真实节点数
+ * @returns {Promise<{nodes: string[], lastSuccess: string|null} | null>}
+ *   命中回退返回缓存原始节点 + 上次成功时间；否则 null（保留实时结果）
+ */
+export async function resolvePreviewCacheFallback(storage, sub, liveRealCount) {
+    if (sub?.enableNodeCache !== true) return null;
+    const cached = await readProtectiveNodeCache(storage, sub);
+    if (!cached?.nodes?.length) return null;
+    // 实时结果通过骤降护栏 → 实时可信，保留实时（不回退）
+    if (shouldAcceptSnapshot(cached.nodes.length, liveRealCount)) return null;
+    return { nodes: cached.nodes, lastSuccess: cached.updatedAt || null };
+}

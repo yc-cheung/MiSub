@@ -1,10 +1,11 @@
 import { StorageFactory } from '../../storage-adapter.js';
 import { createJsonResponse } from '../utils.js';
 import { parseNodeInfo } from '../utils/geo-utils.js';
-import { calculateProtocolStats, calculateRegionStats } from '../utils/node-parser.js';
+import { parseNodeList, calculateProtocolStats, calculateRegionStats } from '../utils/node-parser.js';
+import { applyExcludeRulesToNodeObjects } from '../utils/node-cleaner.js';
 import { KV_KEY_SUBS } from '../config.js';
 import { fetchSubscriptionNodes } from './node-fetcher.js';
-import { warmProtectiveNodeCache } from '../../services/protective-node-cache.js';
+import { warmProtectiveNodeCache, resolvePreviewCacheFallback, isRealProxyNode } from '../../services/protective-node-cache.js';
 
 /**
  * 处理单个订阅模式的节点获取
@@ -60,6 +61,27 @@ export async function handleSingleSubscriptionMode(request, env, subscriptionId,
     // 预热保护性缓存：单订阅预览成功（开启开关）写入「上次成功」原始节点快照
     if (subscription.enableNodeCache === true && result?.success && Array.isArray(result.nodes) && result.nodes.length > 0) {
         await warmProtectiveNodeCache(storageAdapter, subscription, result.nodes.map(node => node.url));
+    }
+
+    // 保护性缓存回退：机场拉取失败/0节点/骤降 且有快照 → 改供缓存节点（对内诚实，带 fromCache 标记）。
+    // 触发条件与对外输出一致（共用 resolvePreviewCacheFallback → shouldAcceptSnapshot）。
+    const liveRealCount = (result.nodes || []).filter(node => isRealProxyNode(node.url)).length;
+    const fallback = await resolvePreviewCacheFallback(storageAdapter, subscription, liveRealCount);
+    if (fallback) {
+        // 快照存「上游原始节点」，重新解析为节点对象，走与实时一致的下游处理（套订阅 exclude）。
+        const restoredNodes = applyExcludeRulesToNodeObjects(parseNodeList(fallback.nodes.join('\n')), subscription.exclude);
+        return {
+            success: true,
+            subscriptions: [{ ...result, success: true, nodes: restoredNodes, fromCache: true, lastSuccess: fallback.lastSuccess }],
+            nodes: restoredNodes,
+            totalCount: restoredNodes.length,
+            fromCache: true,
+            lastSuccess: fallback.lastSuccess,
+            stats: {
+                protocols: calculateProtocolStats(restoredNodes),
+                regions: calculateRegionStats(restoredNodes)
+            }
+        };
     }
 
     return {

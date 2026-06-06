@@ -26,6 +26,9 @@ A per-**Subscription** "last known good" snapshot of that subscription's nodes, 
 ## Combined-List Cache
 A short-lived performance cache of the *fully assembled* node list for one **Profile** or token, used to answer client requests fast and to absorb transient upstream slowness. Time-bounded (fresh / stale / expired). Distinct from the **Protective Node Cache**, which is per-Subscription, durable, and exists to preserve nodes across failures rather than to speed up responses.
 
+## Node Preview
+An owner-facing view of the nodes a single **Subscription** ("单点订阅预览") or a whole **Profile** ("订阅组预览") currently resolves to. It is part of the owner's dashboard, so it obeys the **Protective Node Cache** honesty contract: when the live upstream **fetch fails** (or yields no trustworthy nodes) and a snapshot exists, it shows the cached nodes flagged as cached ("已用缓存 · 上次成功于 X") instead of reporting "no nodes" — mirroring what clients actually receive while staying honest that the data is cached. Distinct from client subscription output, which serves the same cached nodes *silently*.
+
 ## Fetch Failure
 For Protective Node Cache purposes, a pull of a Subscription's upstream is a **failure** when it does not yield trustworthy nodes: a network/transport error, a non-OK HTTP status, a timeout, a response that parses to zero valid proxy nodes (the "airport returns an expiry/blank page" case), or a **suspicious** response — one that succeeds at the HTTP level but returns drastically fewer nodes than the last good snapshot (the "time-limited airport returns a single 已到期 pseudo-node" case). On any failure, the snapshot is preserved and served rather than overwritten. A minor, plausible decrease in node count is **not** a failure and does overwrite the snapshot.
 
