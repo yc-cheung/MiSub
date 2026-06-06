@@ -62,6 +62,29 @@ const regionStats = ref({});
 const availableProtocols = ref([]);
 const availableRegions = ref([]);
 
+// 保护性缓存回退状态：机场拉取失败时展示「上次成功」缓存节点（对内诚实，挂横幅）
+const fromCache = ref(false);
+const lastSuccess = ref(null);
+const cachedSourceCount = ref(0);
+
+const formatLastSuccess = (iso) => {
+  if (!iso) return '';
+  try {
+    return new Date(iso).toLocaleString('zh-CN');
+  } catch {
+    return iso;
+  }
+};
+
+const protectiveCacheBannerText = computed(() => {
+  if (!fromCache.value) return '';
+  if (cachedSourceCount.value > 0) {
+    return `${cachedSourceCount.value} 个来源已用缓存（机场拉取失败，展示上次成功的缓存节点）`;
+  }
+  const when = lastSuccess.value ? ` · 上次成功 ${formatLastSuccess(lastSuccess.value)}` : '';
+  return `已用缓存${when}（机场拉取失败，展示上次成功的缓存节点）`;
+});
+
 // 复制状态
 const copiedNodeId = ref('');
 
@@ -201,6 +224,9 @@ const resetState = () => {
   regionStats.value = {};
   availableProtocols.value = [];
   availableRegions.value = [];
+  fromCache.value = false;
+  lastSuccess.value = null;
+  cachedSourceCount.value = 0;
   copiedNodeId.value = '';
   pickingMode.value = false;
   selectedUrls.value.clear();
@@ -280,6 +306,9 @@ const loadNodes = async () => {
     allNodes.value = data.nodes || [];
     protocolStats.value = data.stats?.protocols || {};
     regionStats.value = data.stats?.regions || {};
+    fromCache.value = Boolean(data.fromCache);
+    lastSuccess.value = data.lastSuccess || null;
+    cachedSourceCount.value = Number(data.cachedSourceCount) || 0;
 
     // 更新可用筛选选项
     // 协议类型按常见程度排序
@@ -507,6 +536,18 @@ const goToPage = (page) => {
     </template>
 
     <template #body>
+
+      <!-- 保护性缓存回退横幅：对内诚实，提示当前展示的是「上次成功」的缓存节点 -->
+      <div
+        v-if="fromCache"
+        data-testid="preview-protective-cache-banner"
+        class="flex items-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300 sm:px-8"
+      >
+        <svg class="h-4 w-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+        <span>{{ protectiveCacheBannerText }}</span>
+      </div>
 
       <!-- 统计信息 -->
       <div v-if="!loading && !error && Object.keys(protocolStats).length > 0" class="border-b border-gray-100 bg-gray-50/30 px-4 py-6 dark:border-gray-800/50 dark:bg-gray-900/10 sm:px-8">

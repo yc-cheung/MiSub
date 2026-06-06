@@ -262,6 +262,22 @@ export function filterNodeObjects(nodes, rules, mode = 'exclude') {
     });
 }
 
+/**
+ * 对节点对象列表应用订阅级 exclude 规则文本（include/exclude 混合语义）。
+ * 与 fetchSubscriptionNodes 实时路径共用，保证保护性缓存回退与实时过滤一致。
+ * @param {Array} nodes 节点对象列表（含 name/protocol）
+ * @param {string} ruleText 订阅的 exclude 规则文本
+ * @returns {Array} 过滤后的节点对象
+ */
+export function applyExcludeRulesToNodeObjects(nodes, ruleText) {
+    if (!ruleText || !ruleText.trim() || !Array.isArray(nodes)) return nodes;
+    const { includeRules, excludeRules } = parseFilterRuleText(ruleText);
+    let resultNodes = nodes;
+    if (includeRules.hasRules) resultNodes = filterNodeObjects(resultNodes, includeRules, 'include');
+    if (excludeRules.hasRules) resultNodes = filterNodeObjects(resultNodes, excludeRules, 'exclude');
+    return resultNodes;
+}
+
 export function filterNodeUrls(nodeUrls, rules, mode = 'exclude') {
     if (!rules || !rules.hasRules || !Array.isArray(nodeUrls)) return nodeUrls;
 

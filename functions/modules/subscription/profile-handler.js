@@ -1,13 +1,13 @@
 import { StorageFactory } from '../../storage-adapter.js';
 import { createJsonResponse } from '../utils.js';
 import { parseNodeInfo } from '../utils/geo-utils.js';
-import { calculateProtocolStats, calculateRegionStats } from '../utils/node-parser.js';
+import { parseNodeList, calculateProtocolStats, calculateRegionStats } from '../utils/node-parser.js';
 import { runOperatorChain } from '../../utils/operator-runner.js';
 import { adaptLegacyTransform } from '../../utils/legacy-transform-adapter.js';
 import { KV_KEY_SUBS, KV_KEY_PROFILES, KV_KEY_SETTINGS, DEFAULT_SETTINGS } from '../config.js';
 import { fetchSubscriptionNodes } from './node-fetcher.js';
-import { warmProtectiveNodeCache } from '../../services/protective-node-cache.js';
-import { applyManualNodeName } from '../utils/node-cleaner.js';
+import { warmProtectiveNodeCache, resolvePreviewCacheFallback, isRealProxyNode } from '../../services/protective-node-cache.js';
+import { applyManualNodeName, applyExcludeRulesToNodeObjects } from '../utils/node-cleaner.js';
 
 function ensureArray(data) {
     if (!data) return [];
@@ -115,6 +115,26 @@ export async function handleProfileMode(request, env, profileId, userAgent, appl
         return warmProtectiveNodeCache(storageAdapter, sub, fetched.nodes.map(node => node.url));
     }));
 
+    // 保护性缓存回退：拉取失败/0节点/骤降的成员机场，用快照节点顶替（对内诚实，聚合横幅计数）。
+    // 必须在 warming 之后执行——warming 用实时结果，回退才能不污染快照。
+    let cachedSourceCount = 0;
+    await Promise.all(targetSubscriptions.map(async (sub, index) => {
+        const fetched = subscriptionResults[index];
+        const liveRealCount = (fetched?.nodes || []).filter(node => isRealProxyNode(node.url)).length;
+        const fallback = await resolvePreviewCacheFallback(storageAdapter, sub, liveRealCount);
+        if (!fallback) return;
+        // 快照存「上游原始节点」，重新解析并套订阅 exclude，使缓存节点与实时走同一条下游管线。
+        const restoredNodes = applyExcludeRulesToNodeObjects(parseNodeList(fallback.nodes.join('\n')), sub.exclude);
+        subscriptionResults[index] = {
+            ...fetched,
+            success: true,
+            nodes: restoredNodes,
+            fromCache: true,
+            lastSuccess: fallback.lastSuccess
+        };
+        cachedSourceCount += 1;
+    }));
+
     // 合并所有结果
     const allResults = [...subscriptionResults, ...manualNodeResults];
 
@@ -188,6 +208,8 @@ export async function handleProfileMode(request, env, profileId, userAgent, appl
         subscriptions: allResults,
         nodes: processedNodes,
         totalCount: processedNodes.length,
+        fromCache: cachedSourceCount > 0,
+        cachedSourceCount,
         stats: {
             protocols: protocolStats,
             regions: regionStats

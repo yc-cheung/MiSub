@@ -3,7 +3,8 @@ import {
     buildSubscriptionNodeCacheKey,
     shouldAcceptSnapshot,
     readProtectiveNodeCache,
-    warmProtectiveNodeCache
+    warmProtectiveNodeCache,
+    resolvePreviewCacheFallback
 } from '../../functions/services/protective-node-cache.js';
 
 function createMemoryStorage(initial = {}) {
@@ -87,5 +88,57 @@ describe('protective node cache module', () => {
         });
         const cache = await readProtectiveNodeCache(storage, SUB);
         expect(cache?.nodes).toEqual(['trojan://a@h:443#A']);
+    });
+
+    describe('resolvePreviewCacheFallback', () => {
+        const FOUR_NODES = ['1', '2', '3', '4'].map(n => `trojan://x@h:443#${n}`);
+
+        function withSnapshot(extra = {}) {
+            const key = buildSubscriptionNodeCacheKey(SUB);
+            return createMemoryStorage({
+                [key]: {
+                    nodes: FOUR_NODES,
+                    nodeCount: 4,
+                    sourceUrl: SUB.url,
+                    updatedAt: '2026-06-01T00:00:00.000Z',
+                    ...extra
+                }
+            });
+        }
+
+        it('实时拉取失败（0 节点）且有快照时，返回缓存节点与上次成功时间', async () => {
+            const storage = withSnapshot();
+            const sub = { ...SUB, enableNodeCache: true };
+            const fallback = await resolvePreviewCacheFallback(storage, sub, 0);
+            expect(fallback?.nodes).toEqual(FOUR_NODES);
+            expect(fallback?.lastSuccess).toBe('2026-06-01T00:00:00.000Z');
+        });
+
+        it('未开启 enableNodeCache 时不回退（返回 null）', async () => {
+            const storage = withSnapshot();
+            const sub = { ...SUB, enableNodeCache: false };
+            expect(await resolvePreviewCacheFallback(storage, sub, 0)).toBeNull();
+        });
+
+        it('没有快照时不回退（返回 null）', async () => {
+            const storage = createMemoryStorage();
+            const sub = { ...SUB, enableNodeCache: true };
+            expect(await resolvePreviewCacheFallback(storage, sub, 0)).toBeNull();
+        });
+
+        it('实时结果通过骤降护栏（可信）时保留实时（返回 null）', async () => {
+            const storage = withSnapshot();
+            const sub = { ...SUB, enableNodeCache: true };
+            // 旧快照 4 个，实时 3 个（>一半）→ 实时可信，不回退
+            expect(await resolvePreviewCacheFallback(storage, sub, 3)).toBeNull();
+        });
+
+        it('实时节点骤降（不足旧快照一半）时回退到缓存', async () => {
+            const storage = withSnapshot();
+            const sub = { ...SUB, enableNodeCache: true };
+            // 旧快照 4 个，实时仅 1 个（<一半）→ 软失败，回退
+            const fallback = await resolvePreviewCacheFallback(storage, sub, 1);
+            expect(fallback?.nodes).toEqual(FOUR_NODES);
+        });
     });
 });
